@@ -3,9 +3,17 @@ import {
   useEffect,
   useRef,
   useState,
+  type FormEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
-import { getLibraryErrorMessage, listEntries } from "./api";
+import {
+  createEntry,
+  deleteEntry,
+  getLibraryErrorMessage,
+  listEntries,
+  updateEntry,
+} from "./api";
 import {
   ENTRY_STATUS_LABELS,
   MEDIA_TYPE_LABELS,
@@ -99,7 +107,7 @@ function LoadingState() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="library-state library-state--empty">
       <svg
@@ -120,6 +128,12 @@ function EmptyState() {
       <p className="library-state__eyebrow">A FRESH START</p>
       <h3>内容库还是空的</h3>
       <p>好故事值得被记住。这里会安静地收下你的每一次追更。</p>
+      <button className="primary-button empty-state__add" type="button" onClick={onAdd}>
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M10 4v12M4 10h12" />
+        </svg>
+        添加第一个条目
+      </button>
     </div>
   );
 }
@@ -148,6 +162,546 @@ function ErrorState({
         重新加载
       </button>
     </div>
+  );
+}
+
+interface DialogProps {
+  title: string;
+  titleId: string;
+  busy?: boolean;
+  initialFocusRef: RefObject<HTMLElement | null>;
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+}
+
+function Dialog({
+  title,
+  titleId,
+  busy = false,
+  initialFocusRef,
+  fallbackFocusRef,
+  onClose,
+  children,
+  className = "",
+}: DialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const fallbackFocus = fallbackFocusRef?.current;
+    initialFocusRef.current?.focus();
+
+    return () => {
+      if (previouslyFocused?.isConnected) {
+        previouslyFocused.focus();
+      } else {
+        fallbackFocus?.focus();
+      }
+    };
+  }, [fallbackFocusRef, initialFocusRef]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        if (!busy) {
+          event.preventDefault();
+          closeRef.current();
+        }
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialogRef.current) {
+        return;
+      }
+
+      const focusableElements = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.getAttribute("aria-hidden") !== "true");
+      const first = focusableElements[0];
+      const last = focusableElements.at(-1);
+
+      if (!first || !last) {
+        event.preventDefault();
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      if (!dialogRef.current.contains(activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [busy]);
+
+  return (
+    <div
+      className="dialog-backdrop"
+      onMouseDown={(event) => {
+        if (!busy && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className={`dialog ${className}`.trim()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+      >
+        <div className="dialog__header">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            className="icon-button dialog__close"
+            type="button"
+            aria-label="关闭对话框"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="m5 5 10 10M15 5 5 15" />
+            </svg>
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+type EditorState =
+  | { mode: "create" }
+  | { mode: "edit"; entry: MediaEntry }
+  | null;
+
+interface EntryFormValues {
+  title: string;
+  mediaType: MediaType;
+  currentProgress: string;
+  totalProgress: string;
+  status: MediaEntry["status"];
+}
+
+type EntryField = "title" | "currentProgress" | "totalProgress";
+type EntryFormErrors = Partial<Record<EntryField | "form", string>>;
+
+const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
+const ENTRY_STATUSES = ["tracking", "completed"] as const;
+
+function getWriteErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
+}
+
+function EntryFormDialog({
+  editor,
+  fallbackFocusRef,
+  onClose,
+  onSaved,
+}: {
+  editor: Exclude<EditorState, null>;
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onSaved: (entry: MediaEntry) => void;
+}) {
+  const editingEntry = editor.mode === "edit" ? editor.entry : null;
+  const [values, setValues] = useState<EntryFormValues>(() => ({
+    title: editingEntry?.title ?? "",
+    mediaType: editingEntry?.mediaType ?? "drama",
+    currentProgress: editingEntry ? String(editingEntry.currentProgress) : "0",
+    totalProgress: editingEntry?.totalProgress
+      ? String(editingEntry.totalProgress)
+      : "",
+    status: editingEntry?.status ?? "tracking",
+  }));
+  const [errors, setErrors] = useState<EntryFormErrors>({});
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const currentProgressRef = useRef<HTMLInputElement>(null);
+  const totalProgressRef = useRef<HTMLInputElement>(null);
+  const unit = MEDIA_TYPE_UNITS[values.mediaType];
+  const titleId = "entry-form-title";
+
+  function changeField<Field extends keyof EntryFormValues>(
+    field: Field,
+    value: EntryFormValues[Field],
+  ) {
+    setValues((current) => ({ ...current, [field]: value }));
+    setErrors((current) => ({
+      ...current,
+      [field]: undefined,
+      ...(field === "currentProgress" || field === "totalProgress"
+        ? { currentProgress: undefined, totalProgress: undefined }
+        : {}),
+      form: undefined,
+    }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (savingRef.current) {
+      return;
+    }
+
+    const nextErrors: EntryFormErrors = {};
+    const title = values.title.trim();
+    const currentProgressText = values.currentProgress.trim();
+    const totalProgressText = values.totalProgress.trim();
+    const currentProgress = Number(currentProgressText);
+    const totalProgress = totalProgressText ? Number(totalProgressText) : null;
+
+    if (!title) {
+      nextErrors.title = "请输入标题。";
+    }
+    if (
+      !/^\d+$/.test(currentProgressText) ||
+      !Number.isSafeInteger(currentProgress)
+    ) {
+      nextErrors.currentProgress = "当前进度必须是非负整数。";
+    }
+    if (
+      totalProgress !== null &&
+      (!/^\d+$/.test(totalProgressText) ||
+        !Number.isSafeInteger(totalProgress) ||
+        totalProgress <= 0)
+    ) {
+      nextErrors.totalProgress = "总进度必须为空或正整数。";
+    }
+    if (
+      !nextErrors.currentProgress &&
+      !nextErrors.totalProgress &&
+      totalProgress !== null &&
+      currentProgress > totalProgress
+    ) {
+      nextErrors.currentProgress = "当前进度不能大于总进度。";
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
+      if (nextErrors.title) {
+        titleRef.current?.focus();
+      } else if (nextErrors.currentProgress) {
+        currentProgressRef.current?.focus();
+      } else {
+        totalProgressRef.current?.focus();
+      }
+      return;
+    }
+
+    savingRef.current = true;
+    setSaving(true);
+    setErrors({});
+    const input = {
+      title,
+      mediaType: values.mediaType,
+      currentProgress,
+      totalProgress,
+      status: values.status,
+    };
+
+    try {
+      const savedEntry = editingEntry
+        ? await updateEntry(editingEntry.id, input)
+        : await createEntry(input);
+      onSaved(savedEntry);
+    } catch (error) {
+      setErrors({
+        form: getWriteErrorMessage(error, "保存条目失败，请重试。"),
+      });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog
+      title={editingEntry ? "编辑条目" : "添加条目"}
+      titleId={titleId}
+      busy={saving}
+      initialFocusRef={titleRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--form"
+    >
+      <form className="entry-form" noValidate onSubmit={handleSubmit}>
+        <div className="dialog__body entry-form__body">
+          <p className="dialog__description">
+            {editingEntry
+              ? `更新《${editingEntry.title}》的类型、进度与状态。`
+              : "记下新的故事，从当前进度继续。"}
+          </p>
+          {errors.form ? (
+            <p className="form-error" role="alert">
+              {errors.form}
+            </p>
+          ) : null}
+          <fieldset className="entry-form__fields" disabled={saving}>
+            <div className="form-field">
+              <label htmlFor="entry-title">标题</label>
+              <input
+                id="entry-title"
+                name="title"
+                type="text"
+                value={values.title}
+                required
+                aria-invalid={errors.title ? true : undefined}
+                aria-describedby={errors.title ? "entry-title-error" : undefined}
+                ref={titleRef}
+                onChange={(event) => changeField("title", event.target.value)}
+              />
+              {errors.title ? (
+                <p className="field-error" id="entry-title-error">
+                  {errors.title}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="entry-media-type">类型</label>
+              <select
+                id="entry-media-type"
+                name="mediaType"
+                value={values.mediaType}
+                onChange={(event) => {
+                  const mediaType = event.target.value as MediaType;
+                  setValues((current) => ({
+                    ...current,
+                    mediaType,
+                    totalProgress:
+                      mediaType === "movie" && !current.totalProgress.trim()
+                        ? "1"
+                        : current.totalProgress,
+                  }));
+                  setErrors((current) => ({
+                    ...current,
+                    currentProgress: undefined,
+                    totalProgress: undefined,
+                    form: undefined,
+                  }));
+                }}
+              >
+                {MEDIA_TYPES.map((mediaType) => (
+                  <option key={mediaType} value={mediaType}>
+                    {MEDIA_TYPE_LABELS[mediaType]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="entry-form__progress-row">
+              <div className="form-field">
+                <label htmlFor="entry-current-progress">
+                  当前进度（{unit}）
+                </label>
+                <input
+                  id="entry-current-progress"
+                  name="currentProgress"
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  step="1"
+                  value={values.currentProgress}
+                  required
+                  aria-invalid={errors.currentProgress ? true : undefined}
+                  aria-describedby={
+                    errors.currentProgress
+                      ? "entry-current-progress-error"
+                      : undefined
+                  }
+                  ref={currentProgressRef}
+                  onChange={(event) =>
+                    changeField("currentProgress", event.target.value)
+                  }
+                />
+                {errors.currentProgress ? (
+                  <p className="field-error" id="entry-current-progress-error">
+                    {errors.currentProgress}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="entry-total-progress">
+                  总进度（{unit}，选填）
+                </label>
+                <input
+                  id="entry-total-progress"
+                  name="totalProgress"
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={values.totalProgress}
+                  aria-invalid={errors.totalProgress ? true : undefined}
+                  aria-describedby={`entry-total-progress-hint${
+                    errors.totalProgress ? " entry-total-progress-error" : ""
+                  }`}
+                  ref={totalProgressRef}
+                  onChange={(event) =>
+                    changeField("totalProgress", event.target.value)
+                  }
+                />
+                <p className="field-hint" id="entry-total-progress-hint">
+                  留空表示总进度未知
+                </p>
+                {errors.totalProgress ? (
+                  <p className="field-error" id="entry-total-progress-error">
+                    {errors.totalProgress}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="entry-status">状态</label>
+              <select
+                id="entry-status"
+                name="status"
+                value={values.status}
+                onChange={(event) =>
+                  changeField(
+                    "status",
+                    event.target.value as EntryFormValues["status"],
+                  )
+                }
+              >
+                {ENTRY_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {ENTRY_STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </fieldset>
+        </div>
+        <div className="dialog__actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={saving}
+            onClick={onClose}
+          >
+            取消
+          </button>
+          <button className="primary-button" type="submit" disabled={saving}>
+            {saving
+              ? "保存中…"
+              : editingEntry
+                ? "保存修改"
+                : "添加条目"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function DeleteEntryDialog({
+  entry,
+  fallbackFocusRef,
+  onClose,
+  onDeleted,
+}: {
+  entry: MediaEntry;
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onDeleted: (id: string) => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const deletingRef = useRef(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  async function handleDelete() {
+    if (deletingRef.current) {
+      return;
+    }
+
+    deletingRef.current = true;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteEntry(entry.id);
+      onDeleted(entry.id);
+    } catch (deleteError) {
+      setError(getWriteErrorMessage(deleteError, "删除条目失败，请重试。"));
+    } finally {
+      deletingRef.current = false;
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <Dialog
+      title="删除条目"
+      titleId="delete-entry-title"
+      busy={deleting}
+      initialFocusRef={cancelRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--confirm"
+    >
+      <div className="dialog__body">
+        <p className="dialog__description">
+          确定要删除<strong className="delete-entry__title">《{entry.title}》</strong>
+          吗？此操作无法撤销。
+        </p>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <div className="dialog__actions">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={deleting}
+          ref={cancelRef}
+          onClick={onClose}
+        >
+          取消
+        </button>
+        <button
+          className="danger-button"
+          type="button"
+          disabled={deleting}
+          onClick={() => {
+            void handleDelete();
+          }}
+        >
+          {deleting ? "删除中…" : "确认删除"}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -225,7 +779,15 @@ function formatProgress(entry: MediaEntry): string {
   return `${entry.currentProgress}${total} ${unit}`;
 }
 
-function EntryCard({ entry }: { entry: MediaEntry }) {
+function EntryCard({
+  entry,
+  onEdit,
+  onDelete,
+}: {
+  entry: MediaEntry;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const percentage = getProgressPercentage(entry);
   const titleId = `entry-title-${entry.id}`;
 
@@ -278,22 +840,84 @@ function EntryCard({ entry }: { entry: MediaEntry }) {
         </div>
 
         <div className="entry-card__footer">
-          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <circle cx="10" cy="10" r="7" />
-            <path d="M10 6v4l2.5 1.5" />
-          </svg>
-          <time dateTime={entry.updatedAt}>
-            更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}
-          </time>
+          <div className="entry-card__updated">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="7" />
+              <path d="M10 6v4l2.5 1.5" />
+            </svg>
+            <time dateTime={entry.updatedAt}>
+              更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}
+            </time>
+          </div>
+          <div className="entry-card__actions">
+            <button
+              className="icon-button entry-card__action"
+              type="button"
+              aria-label={`编辑《${entry.title}》`}
+              onClick={onEdit}
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="m12.8 3.8 3.4 3.4M4 16l1-4L14 3a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2l-9 9-4 1Z" />
+              </svg>
+            </button>
+            <button
+              className="icon-button entry-card__action entry-card__action--delete"
+              type="button"
+              aria-label={`删除《${entry.title}》`}
+              onClick={onDelete}
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M3 5h14M8 2.5h4M6 5l.7 12h6.6L14 5M8.5 8v6M11.5 8v6" />
+              </svg>
+            </button>
+          </div>
         </div>
       </article>
     </li>
   );
 }
 
+function sortEntries(entries: MediaEntry[]): MediaEntry[] {
+  return [...entries].sort(
+    (first, second) =>
+      second.updatedAt.localeCompare(first.updatedAt) ||
+      first.id.localeCompare(second.id),
+  );
+}
+
 function App() {
   const [library, setLibrary] = useState<LibraryState>({ status: "loading" });
+  const [editor, setEditor] = useState<EditorState>(null);
+  const [pendingDeletion, setPendingDeletion] = useState<MediaEntry | null>(
+    null,
+  );
   const latestRequest = useRef(0);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+
+  function handleSaved(savedEntry: MediaEntry) {
+    setLibrary((current) => ({
+      status: "success",
+      entries: sortEntries([
+        savedEntry,
+        ...(current.status === "success"
+          ? current.entries.filter((entry) => entry.id !== savedEntry.id)
+          : []),
+      ]),
+    }));
+    setEditor(null);
+  }
+
+  function handleDeleted(id: string) {
+    setLibrary((current) =>
+      current.status === "success"
+        ? {
+            status: "success",
+            entries: current.entries.filter((entry) => entry.id !== id),
+          }
+        : current,
+    );
+    setPendingDeletion(null);
+  }
 
   const loadEntries = useCallback(async () => {
     const requestId = ++latestRequest.current;
@@ -354,7 +978,21 @@ function App() {
               <p className="library__eyebrow">MY LIBRARY</p>
               <h2 id="library-title">我的内容库</h2>
             </div>
-            <span className="library__heading-note">不疾不徐，持续喜欢</span>
+            <div className="library__heading-actions">
+              <span className="library__heading-note">不疾不徐，持续喜欢</span>
+              <button
+                className="primary-button library__add"
+                type="button"
+                ref={addButtonRef}
+                disabled={library.status === "loading"}
+                onClick={() => setEditor({ mode: "create" })}
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M10 4v12M4 10h12" />
+                </svg>
+                添加条目
+              </button>
+            </div>
           </div>
 
           {library.status === "loading" ? (
@@ -367,13 +1005,18 @@ function App() {
               }}
             />
           ) : library.entries.length === 0 ? (
-            <EmptyState />
+            <EmptyState onAdd={() => setEditor({ mode: "create" })} />
           ) : (
             <>
               <LibrarySummary entries={library.entries} />
               <ul className="entry-grid" aria-label="追更内容列表">
                 {library.entries.map((entry) => (
-                  <EntryCard entry={entry} key={entry.id} />
+                  <EntryCard
+                    entry={entry}
+                    key={entry.id}
+                    onEdit={() => setEditor({ mode: "edit", entry })}
+                    onDelete={() => setPendingDeletion(entry)}
+                  />
                 ))}
               </ul>
             </>
@@ -385,6 +1028,24 @@ function App() {
         <span>追更 · CatchUp</span>
         <span>把故事留在身边，把进度交给时间。</span>
       </footer>
+
+      {editor ? (
+        <EntryFormDialog
+          key={editor.mode === "edit" ? editor.entry.id : "create"}
+          editor={editor}
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setEditor(null)}
+          onSaved={handleSaved}
+        />
+      ) : null}
+      {pendingDeletion ? (
+        <DeleteEntryDialog
+          entry={pendingDeletion}
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setPendingDeletion(null)}
+          onDeleted={handleDeleted}
+        />
+      ) : null}
     </div>
   );
 }

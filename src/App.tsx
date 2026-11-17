@@ -140,6 +140,28 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+function NoResultsState({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="library-state library-state--no-results">
+      <span className="state-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m15.5 15.5 5 5M8 10.5h5" />
+        </svg>
+      </span>
+      <h3>没有找到匹配的条目</h3>
+      <p>试试其他关键词或筛选条件，完整内容库不会受影响。</p>
+      <button
+        className="secondary-button no-results__clear"
+        type="button"
+        onClick={onClear}
+      >
+        清除搜索和筛选
+      </button>
+    </div>
+  );
+}
+
 function ErrorState({
   message,
   onRetry,
@@ -969,6 +991,13 @@ function App() {
   const [entryWriteErrors, setEntryWriteErrors] = useState<
     Record<string, string>
   >({});
+  const [titleQuery, setTitleQuery] = useState("");
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<MediaType | "all">(
+    "all",
+  );
+  const [statusFilter, setStatusFilter] = useState<
+    MediaEntry["status"] | "all"
+  >("all");
   const latestRequest = useRef(0);
   const entryWriteLocks = useRef(new Set<string>());
   const addButtonRef = useRef<HTMLButtonElement>(null);
@@ -1074,6 +1103,27 @@ function App() {
     };
   }, [loadEntries]);
 
+  const normalizedTitleQuery = titleQuery.trim().toLowerCase();
+  const hasActiveFilters =
+    normalizedTitleQuery.length > 0 ||
+    mediaTypeFilter !== "all" ||
+    statusFilter !== "all";
+  const visibleEntries =
+    library.status === "success"
+      ? library.entries.filter(
+          (entry) =>
+            entry.title.toLowerCase().includes(normalizedTitleQuery) &&
+            (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
+            (statusFilter === "all" || entry.status === statusFilter),
+        )
+      : [];
+
+  function clearFilters() {
+    setTitleQuery("");
+    setMediaTypeFilter("all");
+    setStatusFilter("all");
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -1137,21 +1187,93 @@ function App() {
           ) : (
             <>
               <LibrarySummary entries={library.entries} />
-              <ul className="entry-grid" aria-label="追更内容列表">
-                {library.entries.map((entry) => (
-                  <EntryCard
-                    entry={entry}
-                    key={entry.id}
-                    pending={pendingEntryWrites.has(entry.id)}
-                    error={entryWriteErrors[entry.id] ?? null}
-                    onWrite={(action) => {
-                      void handleEntryWrite(entry, action);
-                    }}
-                    onEdit={() => setEditor({ mode: "edit", entry })}
-                    onDelete={() => setPendingDeletion(entry)}
-                  />
-                ))}
-              </ul>
+              <section
+                className="library-filters"
+                role="search"
+                aria-label="内容库搜索与筛选"
+              >
+                <div className="library-filter library-filter--search">
+                  <label htmlFor="library-title-query">搜索标题</label>
+                  <div className="library-filter__search-input">
+                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                      <circle cx="8.5" cy="8.5" r="5.5" />
+                      <path d="m12.5 12.5 4 4" />
+                    </svg>
+                    <input
+                      id="library-title-query"
+                      type="search"
+                      value={titleQuery}
+                      placeholder="输入作品标题"
+                      autoComplete="off"
+                      onChange={(event) => setTitleQuery(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="library-filter">
+                  <label htmlFor="library-media-type-filter">类型筛选</label>
+                  <select
+                    id="library-media-type-filter"
+                    value={mediaTypeFilter}
+                    onChange={(event) =>
+                      setMediaTypeFilter(event.target.value as MediaType | "all")
+                    }
+                  >
+                    <option value="all">全部类型</option>
+                    {MEDIA_TYPES.map((mediaType) => (
+                      <option key={mediaType} value={mediaType}>
+                        {MEDIA_TYPE_LABELS[mediaType]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="library-filter">
+                  <label htmlFor="library-status-filter">状态筛选</label>
+                  <select
+                    id="library-status-filter"
+                    value={statusFilter}
+                    onChange={(event) =>
+                      setStatusFilter(
+                        event.target.value as MediaEntry["status"] | "all",
+                      )
+                    }
+                  >
+                    <option value="all">全部状态</option>
+                    {ENTRY_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {ENTRY_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {hasActiveFilters && visibleEntries.length > 0 ? (
+                  <button
+                    className="secondary-button library-filters__clear"
+                    type="button"
+                    onClick={clearFilters}
+                  >
+                    清除搜索和筛选
+                  </button>
+                ) : null}
+              </section>
+              {visibleEntries.length > 0 ? (
+                <ul className="entry-grid" aria-label="追更内容列表">
+                  {visibleEntries.map((entry) => (
+                    <EntryCard
+                      entry={entry}
+                      key={entry.id}
+                      pending={pendingEntryWrites.has(entry.id)}
+                      error={entryWriteErrors[entry.id] ?? null}
+                      onWrite={(action) => {
+                        void handleEntryWrite(entry, action);
+                      }}
+                      onEdit={() => setEditor({ mode: "edit", entry })}
+                      onDelete={() => setPendingDeletion(entry)}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <NoResultsState onClear={clearFilters} />
+              )}
             </>
           )}
         </section>

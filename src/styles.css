@@ -318,6 +318,77 @@ svg {
   color: #8a7145;
 }
 
+.library-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(130px, 1fr)) auto;
+  gap: 13px;
+  align-items: end;
+  margin-bottom: 24px;
+  padding: 17px;
+  border: 1px solid rgb(48 73 60 / 10%);
+  border-radius: 15px;
+  background: rgb(250 249 244 / 62%);
+}
+
+.library-filter {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.library-filter > label {
+  color: #5d6f63;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+}
+
+.library-filter input,
+.library-filter select {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  border: 1px solid #ccd4c9;
+  border-radius: 9px;
+  color: #293f34;
+  background: #fffef9;
+  font-size: 13px;
+}
+
+.library-filter input {
+  padding: 9px 12px 9px 37px;
+}
+
+.library-filter select {
+  padding: 9px 11px;
+  cursor: pointer;
+}
+
+.library-filter__search-input {
+  position: relative;
+  min-width: 0;
+}
+
+.library-filter__search-input > svg {
+  position: absolute;
+  top: 13px;
+  left: 12px;
+  width: 18px;
+  height: 18px;
+  color: #76877a;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.library-filters__clear {
+  min-height: 44px;
+  padding-inline: 13px;
+  white-space: nowrap;
+}
+
 .entry-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -736,6 +807,14 @@ svg {
   background: rgb(250 247 240 / 70%);
 }
 
+.library-state--no-results {
+  min-height: 260px;
+}
+
+.no-results__clear {
+  margin-top: 22px;
+}
+
 .state-icon {
   display: grid;
   width: 42px;
@@ -1090,6 +1169,15 @@ svg {
 }
 
 @media (max-width: 1000px) {
+  .library-filters {
+    grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  }
+
+  .library-filters__clear {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
   .entry-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1206,6 +1294,23 @@ svg {
 
   .summary-card__value span {
     font-size: 10px;
+  }
+
+  .library-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 14px;
+  }
+
+  .library-filter--search,
+  .library-filters__clear {
+    grid-column: 1 / -1;
+  }
+
+  .library-filters__clear {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .entry-grid {

@@ -590,6 +590,188 @@ describe("快捷进度操作", () => {
   });
 });
 
+describe("搜索与筛选", () => {
+  function expectVisibleTitles(titles: string[]) {
+    const list = screen.getByRole("list", { name: "追更内容列表" });
+    expect(
+      within(list)
+        .getAllByRole("article")
+        .map((article) => within(article).getByRole("heading").textContent),
+    ).toEqual(titles);
+  }
+
+  it("标题搜索忽略大小写和首尾空白，并匹配实际标题", async () => {
+    const user = userEvent.setup();
+    const entries = [
+      makeEntry({ id: "english", title: "The Last of Us" }),
+      makeEntry({ id: "similar", title: "The Last Story" }),
+      makeEntry({ id: "chinese", title: "最后生还者" }),
+    ];
+    mockedListEntries.mockResolvedValue(entries);
+    render(<App />);
+
+    await screen.findByRole("article", { name: "The Last of Us" });
+    const search = screen.getByLabelText("搜索标题");
+    expect(search).toHaveValue("");
+    expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
+    expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
+
+    await user.type(search, "   ");
+    expectVisibleTitles(entries.map((entry) => entry.title));
+
+    await user.type(search, "tHe LaSt oF  ");
+    expectVisibleTitles(["The Last of Us"]);
+    expect(screen.queryByRole("article", { name: "The Last Story" })).toBeNull();
+    expect(screen.queryByRole("article", { name: "最后生还者" })).toBeNull();
+  });
+
+  it("类型和状态可分别筛选，有结果时可一键清除全部条件", async () => {
+    const user = userEvent.setup();
+    const entries = [
+      makeEntry({ id: "drama", title: "剧集故事", mediaType: "drama" }),
+      makeEntry({
+        id: "anime",
+        title: "番剧故事",
+        mediaType: "anime",
+        status: "completed",
+      }),
+      makeEntry({ id: "novel", title: "小说故事", mediaType: "novel" }),
+      makeEntry({
+        id: "movie",
+        title: "电影故事",
+        mediaType: "movie",
+        status: "completed",
+      }),
+    ];
+    mockedListEntries.mockResolvedValue(entries);
+    render(<App />);
+
+    await screen.findByRole("article", { name: "剧集故事" });
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "anime");
+    expectVisibleTitles(["番剧故事"]);
+    expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
+
+    await user.click(
+      screen.getByRole("button", { name: "清除搜索和筛选" }),
+    );
+    expectVisibleTitles(entries.map((entry) => entry.title));
+    expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
+
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "completed");
+    expectVisibleTitles(["番剧故事", "电影故事"]);
+    expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
+
+    await user.click(
+      screen.getByRole("button", { name: "清除搜索和筛选" }),
+    );
+    expectVisibleTitles(entries.map((entry) => entry.title));
+    expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
+  });
+
+  it("组合条件无结果时显示独立状态，保留整体摘要并可一键恢复", async () => {
+    const user = userEvent.setup();
+    const entries = [
+      makeEntry({
+        id: "three-body",
+        title: "三体",
+        mediaType: "novel",
+        status: "completed",
+      }),
+      makeEntry({
+        id: "season",
+        title: "漫长的季节",
+        mediaType: "drama",
+        status: "completed",
+      }),
+      makeEntry({ id: "lightning", title: "球状闪电", mediaType: "novel" }),
+    ];
+    mockedListEntries.mockResolvedValue(entries);
+    render(<App />);
+
+    await screen.findByRole("article", { name: "三体" });
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "novel");
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "completed");
+    expectVisibleTitles(["三体"]);
+
+    await user.type(screen.getByLabelText("搜索标题"), "  没有这部作品  ");
+    expect(
+      screen.getByRole("heading", { name: "没有找到匹配的条目" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "内容库还是空的" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "追更内容列表" })).toBeNull();
+    const summary = screen.getByRole("region", { name: "内容库摘要" });
+    expect(summary).toHaveTextContent("条目总数3项");
+    expect(summary).toHaveTextContent("正在追更1项在追");
+    expect(summary).toHaveTextContent("已经看完2项完成");
+
+    await user.click(
+      screen.getByRole("button", { name: "清除搜索和筛选" }),
+    );
+    expectVisibleTitles(entries.map((entry) => entry.title));
+    expect(screen.getByLabelText("搜索标题")).toHaveValue("");
+    expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
+    expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
+    expect(screen.queryByRole("heading", { name: "没有找到匹配的条目" })).toBeNull();
+  });
+
+  it("快捷进度更新后继续应用当前筛选并按 updatedAt 倒序", async () => {
+    const user = userEvent.setup();
+    const target = makeEntry({
+      id: "target",
+      title: "共同故事一",
+      currentProgress: 1,
+      totalProgress: 2,
+      updatedAt: "2026-11-14T08:00:00.000Z",
+    });
+    const other = makeEntry({
+      id: "other",
+      title: "共同故事二",
+      currentProgress: 4,
+      totalProgress: 10,
+      updatedAt: "2026-11-16T08:00:00.000Z",
+    });
+    const completed = makeEntry({
+      id: "completed",
+      title: "其他故事",
+      status: "completed",
+      updatedAt: "2026-11-15T08:00:00.000Z",
+    });
+    const updatedTarget = makeEntry({
+      ...target,
+      currentProgress: 2,
+      status: "completed",
+      updatedAt: "2026-11-17T08:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([other, completed, target]);
+    mockedAdjustProgress.mockResolvedValue(updatedTarget);
+    render(<App />);
+
+    const targetCard = await screen.findByRole("article", {
+      name: target.title,
+    });
+    await user.type(screen.getByLabelText("搜索标题"), "  故事  ");
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "tracking");
+    expectVisibleTitles([other.title, target.title]);
+
+    await user.click(
+      within(targetCard).getByRole("button", {
+        name: `《${target.title}》进度加一`,
+      }),
+    );
+
+    expectVisibleTitles([other.title]);
+    expect(screen.getByLabelText("搜索标题")).toHaveValue("  故事  ");
+    expect(screen.getByLabelText("状态筛选")).toHaveValue("tracking");
+    const summary = screen.getByRole("region", { name: "内容库摘要" });
+    expect(summary).toHaveTextContent("条目总数3项");
+    expect(summary).toHaveTextContent("正在追更1项在追");
+    expect(summary).toHaveTextContent("已经看完2项完成");
+
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "all");
+    expectVisibleTitles([target.title, other.title, completed.title]);
+  });
+});
+
 describe("条目管理", () => {
   it("空态可打开新增对话框，初始聚焦标题并在 Escape 关闭后返回焦点", async () => {
     const user = userEvent.setup();

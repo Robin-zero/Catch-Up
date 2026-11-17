@@ -10,7 +10,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev:desktop": "tauri dev",
+    "build:desktop": "tauri build",
+    "dev:android": "tauri android dev",
+    "build:android": "tauri android build",
+    "dev:ios": "tauri ios dev",
+    "build:ios": "tauri ios build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",

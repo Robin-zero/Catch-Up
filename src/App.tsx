@@ -8,10 +8,12 @@ import {
   type RefObject,
 } from "react";
 import {
+  adjustProgress,
   createEntry,
   deleteEntry,
   getLibraryErrorMessage,
   listEntries,
+  setEntryStatus,
   updateEntry,
 } from "./api";
 import {
@@ -779,21 +781,36 @@ function formatProgress(entry: MediaEntry): string {
   return `${entry.currentProgress}${total} ${unit}`;
 }
 
+type EntryWriteAction =
+  | { type: "progress"; delta: 1 | -1 }
+  | { type: "status"; status: MediaEntry["status"] };
+
 function EntryCard({
   entry,
+  pending,
+  error,
+  onWrite,
   onEdit,
   onDelete,
 }: {
   entry: MediaEntry;
+  pending: boolean;
+  error: string | null;
+  onWrite: (action: EntryWriteAction) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const percentage = getProgressPercentage(entry);
   const titleId = `entry-title-${entry.id}`;
+  const decrementDisabled = pending || entry.currentProgress === 0;
+  const incrementDisabled =
+    pending ||
+    (entry.totalProgress !== null &&
+      entry.currentProgress >= entry.totalProgress);
 
   return (
     <li className={`entry-card entry-card--${entry.mediaType}`}>
-      <article aria-labelledby={titleId}>
+      <article aria-labelledby={titleId} aria-busy={pending}>
         <div className="entry-card__topline">
           <span className="media-type">
             <MediaTypeIcon type={entry.mediaType} />
@@ -839,6 +856,59 @@ function EntryCard({
           )}
         </div>
 
+        <div className="quick-progress" aria-label={`${entry.title}的快捷操作`}>
+          <div className="quick-progress__steps">
+            <button
+              className="quick-progress__step"
+              type="button"
+              aria-label={`《${entry.title}》进度减一`}
+              disabled={decrementDisabled}
+              onClick={() => onWrite({ type: "progress", delta: -1 })}
+            >
+              <span aria-hidden="true">−</span>
+              <span>1</span>
+            </button>
+            <button
+              className="quick-progress__step"
+              type="button"
+              aria-label={`《${entry.title}》进度加一`}
+              disabled={incrementDisabled}
+              onClick={() => onWrite({ type: "progress", delta: 1 })}
+            >
+              <span aria-hidden="true">+</span>
+              <span>1</span>
+            </button>
+          </div>
+          <button
+            className="quick-progress__status"
+            type="button"
+            aria-label={
+              entry.status === "completed"
+                ? `重新追更《${entry.title}》`
+                : `标记《${entry.title}》完成`
+            }
+            disabled={pending}
+            onClick={() =>
+              onWrite({
+                type: "status",
+                status: entry.status === "completed" ? "tracking" : "completed",
+              })
+            }
+          >
+            {entry.status === "completed" ? "重新追更" : "标记完成"}
+          </button>
+        </div>
+        {pending ? (
+          <p className="entry-card__write-status" role="status">
+            正在更新《{entry.title}》…
+          </p>
+        ) : null}
+        {error ? (
+          <p className="entry-card__write-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
         <div className="entry-card__footer">
           <div className="entry-card__updated">
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -854,6 +924,7 @@ function EntryCard({
               className="icon-button entry-card__action"
               type="button"
               aria-label={`编辑《${entry.title}》`}
+              disabled={pending}
               onClick={onEdit}
             >
               <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -864,6 +935,7 @@ function EntryCard({
               className="icon-button entry-card__action entry-card__action--delete"
               type="button"
               aria-label={`删除《${entry.title}》`}
+              disabled={pending}
               onClick={onDelete}
             >
               <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -891,20 +963,76 @@ function App() {
   const [pendingDeletion, setPendingDeletion] = useState<MediaEntry | null>(
     null,
   );
+  const [pendingEntryWrites, setPendingEntryWrites] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [entryWriteErrors, setEntryWriteErrors] = useState<
+    Record<string, string>
+  >({});
   const latestRequest = useRef(0);
+  const entryWriteLocks = useRef(new Set<string>());
   const addButtonRef = useRef<HTMLButtonElement>(null);
 
-  function handleSaved(savedEntry: MediaEntry) {
+  function handleEntryUpdated(updatedEntry: MediaEntry) {
     setLibrary((current) => ({
       status: "success",
       entries: sortEntries([
-        savedEntry,
+        updatedEntry,
         ...(current.status === "success"
-          ? current.entries.filter((entry) => entry.id !== savedEntry.id)
+          ? current.entries.filter((entry) => entry.id !== updatedEntry.id)
           : []),
       ]),
     }));
+    setEntryWriteErrors((current) => {
+      const next = { ...current };
+      delete next[updatedEntry.id];
+      return next;
+    });
+  }
+
+  function handleSaved(savedEntry: MediaEntry) {
+    handleEntryUpdated(savedEntry);
     setEditor(null);
+  }
+
+  async function handleEntryWrite(
+    entry: MediaEntry,
+    action: EntryWriteAction,
+  ) {
+    if (entryWriteLocks.current.has(entry.id)) {
+      return;
+    }
+
+    entryWriteLocks.current.add(entry.id);
+    setPendingEntryWrites((current) => new Set(current).add(entry.id));
+    setEntryWriteErrors((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
+
+    try {
+      const updatedEntry =
+        action.type === "progress"
+          ? await adjustProgress(entry.id, action.delta)
+          : await setEntryStatus(entry.id, action.status);
+      handleEntryUpdated(updatedEntry);
+    } catch (writeError) {
+      setEntryWriteErrors((current) => ({
+        ...current,
+        [entry.id]: `更新《${entry.title}》失败。${getWriteErrorMessage(
+          writeError,
+          "请重试。",
+        )}`,
+      }));
+    } finally {
+      entryWriteLocks.current.delete(entry.id);
+      setPendingEntryWrites((current) => {
+        const next = new Set(current);
+        next.delete(entry.id);
+        return next;
+      });
+    }
   }
 
   function handleDeleted(id: string) {
@@ -1014,6 +1142,11 @@ function App() {
                   <EntryCard
                     entry={entry}
                     key={entry.id}
+                    pending={pendingEntryWrites.has(entry.id)}
+                    error={entryWriteErrors[entry.id] ?? null}
+                    onWrite={(action) => {
+                      void handleEntryWrite(entry, action);
+                    }}
                     onEdit={() => setEditor({ mode: "edit", entry })}
                     onDelete={() => setPendingDeletion(entry)}
                   />

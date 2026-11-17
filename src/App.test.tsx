@@ -1,7 +1,14 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEntry, deleteEntry, listEntries, updateEntry } from "./api";
+import {
+  adjustProgress,
+  createEntry,
+  deleteEntry,
+  listEntries,
+  setEntryStatus,
+  updateEntry,
+} from "./api";
 import App from "./App";
 import type { MediaEntry, MediaType } from "./types";
 
@@ -10,6 +17,8 @@ vi.mock("./api", () => ({
   createEntry: vi.fn(),
   updateEntry: vi.fn(),
   deleteEntry: vi.fn(),
+  adjustProgress: vi.fn(),
+  setEntryStatus: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
   ),
@@ -19,6 +28,8 @@ const mockedListEntries = vi.mocked(listEntries);
 const mockedCreateEntry = vi.mocked(createEntry);
 const mockedUpdateEntry = vi.mocked(updateEntry);
 const mockedDeleteEntry = vi.mocked(deleteEntry);
+const mockedAdjustProgress = vi.mocked(adjustProgress);
+const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 
 function makeEntry(overrides: Partial<MediaEntry> = {}): MediaEntry {
   return {
@@ -47,6 +58,8 @@ beforeEach(() => {
   mockedCreateEntry.mockReset();
   mockedUpdateEntry.mockReset();
   mockedDeleteEntry.mockReset();
+  mockedAdjustProgress.mockReset();
+  mockedSetEntryStatus.mockReset();
 });
 
 describe("内容库", () => {
@@ -212,6 +225,368 @@ describe("内容库", () => {
     expect(
       articles.map((article) => within(article).getByRole("heading").textContent),
     ).toEqual(titles);
+  });
+});
+
+describe("快捷进度操作", () => {
+  it("加一使用后端结果自动完成，并同步摘要、进度条和更新时间排序", async () => {
+    const user = userEvent.setup();
+    const target = makeEntry({
+      id: "target",
+      title: "即将看完",
+      currentProgress: 1,
+      totalProgress: 2,
+      updatedAt: "2026-11-15T08:00:00.000Z",
+    });
+    const other = makeEntry({
+      id: "other",
+      title: "仍在追更",
+      currentProgress: 4,
+      totalProgress: 10,
+      updatedAt: "2026-11-16T08:00:00.000Z",
+    });
+    const updated = makeEntry({
+      ...target,
+      currentProgress: 2,
+      status: "completed",
+      updatedAt: "2026-11-17T08:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([other, target]);
+    mockedAdjustProgress.mockResolvedValue(updated);
+    render(<App />);
+
+    const targetCard = await screen.findByRole("article", {
+      name: target.title,
+    });
+    await user.click(
+      within(targetCard).getByRole("button", {
+        name: `《${target.title}》进度加一`,
+      }),
+    );
+
+    expect(mockedAdjustProgress).toHaveBeenCalledWith(target.id, 1);
+    const updatedCard = screen.getByRole("article", { name: target.title });
+    expect(within(updatedCard).getByText("2 / 2 集")).toBeInTheDocument();
+    expect(within(updatedCard).getByText("100%")).toBeInTheDocument();
+    expect(
+      within(updatedCard).getByRole("progressbar"),
+    ).toHaveAttribute("aria-valuenow", "100");
+    expect(within(updatedCard).getByText("已完成")).toBeInTheDocument();
+    expect(
+      within(updatedCard).getByRole("button", {
+        name: `重新追更《${target.title}》`,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(updatedCard).getByRole("button", {
+        name: `《${target.title}》进度加一`,
+      }),
+    ).toBeDisabled();
+    expect(within(updatedCard).getByText(/^更新于 /)).toHaveAttribute(
+      "dateTime",
+      updated.updatedAt,
+    );
+
+    const list = screen.getByRole("list", { name: "追更内容列表" });
+    expect(
+      within(list)
+        .getAllByRole("article")
+        .map((article) => within(article).getByRole("heading").textContent),
+    ).toEqual([target.title, other.title]);
+    const summary = screen.getByRole("region", { name: "内容库摘要" });
+    expect(summary).toHaveTextContent("正在追更1项在追");
+    expect(summary).toHaveTextContent("已经看完1项完成");
+  });
+
+  it("减一使用后端结果恢复在追，保留对应进度", async () => {
+    const user = userEvent.setup();
+    const original = makeEntry({
+      title: "看完后回退一步",
+      currentProgress: 3,
+      totalProgress: 3,
+      status: "completed",
+    });
+    const updated = makeEntry({
+      ...original,
+      currentProgress: 2,
+      status: "tracking",
+      updatedAt: "2026-11-17T09:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([original]);
+    mockedAdjustProgress.mockResolvedValue(updated);
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: original.title });
+    await user.click(
+      within(card).getByRole("button", {
+        name: `《${original.title}》进度减一`,
+      }),
+    );
+
+    expect(mockedAdjustProgress).toHaveBeenCalledWith(original.id, -1);
+    expect(within(card).getByText("2 / 3 集")).toBeInTheDocument();
+    expect(within(card).getByText("在追")).toBeInTheDocument();
+    expect(
+      within(card).getByRole("button", {
+        name: `标记《${original.title}》完成`,
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/^更新于 /)).toHaveAttribute(
+      "dateTime",
+      updated.updatedAt,
+    );
+  });
+
+  it("在零和总进度处禁用对应按钮，未知总进度仍可加一且不显示百分比", async () => {
+    const user = userEvent.setup();
+    const zero = makeEntry({
+      id: "zero",
+      title: "尚未开始",
+      currentProgress: 0,
+      totalProgress: 2,
+    });
+    const full = makeEntry({
+      id: "full",
+      title: "已经到顶",
+      currentProgress: 2,
+      totalProgress: 2,
+      status: "completed",
+    });
+    const unknown = makeEntry({
+      id: "unknown",
+      title: "连载作品",
+      mediaType: "novel",
+      currentProgress: 8,
+      totalProgress: null,
+    });
+    const updatedUnknown = makeEntry({
+      ...unknown,
+      currentProgress: 23,
+      updatedAt: "2026-11-17T10:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([zero, full, unknown]);
+    mockedAdjustProgress.mockResolvedValue(updatedUnknown);
+    render(<App />);
+
+    const zeroCard = await screen.findByRole("article", { name: zero.title });
+    const fullCard = screen.getByRole("article", { name: full.title });
+    const unknownCard = screen.getByRole("article", { name: unknown.title });
+    expect(
+      within(zeroCard).getByRole("button", {
+        name: `《${zero.title}》进度减一`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(zeroCard).getByRole("button", {
+        name: `《${zero.title}》进度加一`,
+      }),
+    ).toBeEnabled();
+    expect(
+      within(fullCard).getByRole("button", {
+        name: `《${full.title}》进度加一`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(fullCard).getByRole("button", {
+        name: `《${full.title}》进度减一`,
+      }),
+    ).toBeEnabled();
+    expect(within(unknownCard).queryByText(/%/)).toBeNull();
+
+    await user.click(
+      within(unknownCard).getByRole("button", {
+        name: `《${unknown.title}》进度加一`,
+      }),
+    );
+
+    expect(mockedAdjustProgress).toHaveBeenCalledWith(unknown.id, 1);
+    expect(within(unknownCard).getByText("23 章")).toBeInTheDocument();
+    expect(within(unknownCard).queryByText(/%/)).toBeNull();
+    expect(
+      within(unknownCard).getByRole("button", {
+        name: `《${unknown.title}》进度加一`,
+      }),
+    ).toBeEnabled();
+  });
+
+  it("手动完成与重新追更均调用状态接口并保留后端返回的进度", async () => {
+    const user = userEvent.setup();
+    const original = makeEntry({
+      title: "手动管理状态",
+      currentProgress: 4,
+      totalProgress: 10,
+    });
+    const completed = makeEntry({
+      ...original,
+      status: "completed",
+      updatedAt: "2026-11-17T11:00:00.000Z",
+    });
+    const tracking = makeEntry({
+      ...completed,
+      status: "tracking",
+      updatedAt: "2026-11-17T12:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([original]);
+    mockedSetEntryStatus
+      .mockResolvedValueOnce(completed)
+      .mockResolvedValueOnce(tracking);
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: original.title });
+    await user.click(
+      within(card).getByRole("button", {
+        name: `标记《${original.title}》完成`,
+      }),
+    );
+
+    expect(mockedSetEntryStatus).toHaveBeenNthCalledWith(
+      1,
+      original.id,
+      "completed",
+    );
+    expect(within(card).getByText("4 / 10 集")).toBeInTheDocument();
+    expect(within(card).getByText("已完成")).toBeInTheDocument();
+
+    await user.click(
+      within(card).getByRole("button", {
+        name: `重新追更《${original.title}》`,
+      }),
+    );
+
+    expect(mockedSetEntryStatus).toHaveBeenNthCalledWith(
+      2,
+      original.id,
+      "tracking",
+    );
+    expect(within(card).getByText("4 / 10 集")).toBeInTheDocument();
+    expect(within(card).getByText("在追")).toBeInTheDocument();
+    expect(within(card).getByText(/^更新于 /)).toHaveAttribute(
+      "dateTime",
+      tracking.updatedAt,
+    );
+  });
+
+  it("写入失败显示中文错误并保留原条目和摘要", async () => {
+    const user = userEvent.setup();
+    const original = makeEntry({ title: "更新失败的作品" });
+    mockedListEntries.mockResolvedValue([original]);
+    mockedAdjustProgress.mockRejectedValue(
+      new Error("调整进度失败：database locked"),
+    );
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: original.title });
+    await user.click(
+      within(card).getByRole("button", {
+        name: `《${original.title}》进度加一`,
+      }),
+    );
+
+    expect(await within(card).findByRole("alert")).toHaveTextContent(
+      `更新《${original.title}》失败。调整进度失败：database locked`,
+    );
+    expect(within(card).getByText("3 / 12 集")).toBeInTheDocument();
+    expect(within(card).getByText("25%")).toBeInTheDocument();
+    expect(within(card).getByText("在追")).toBeInTheDocument();
+    expect(within(card).getByText(/^更新于 /)).toHaveAttribute(
+      "dateTime",
+      original.updatedAt,
+    );
+    expect(
+      within(card).getByRole("button", {
+        name: `《${original.title}》进度加一`,
+      }),
+    ).toBeEnabled();
+    const summary = screen.getByRole("region", { name: "内容库摘要" });
+    expect(summary).toHaveTextContent("正在追更1项在追");
+    expect(summary).toHaveTextContent("已经看完0项完成");
+  });
+
+  it("逐条目防止连点并禁用相关写操作，同时允许其他条目更新", async () => {
+    const user = userEvent.setup();
+    const first = makeEntry({
+      id: "first",
+      title: "慢请求条目",
+      currentProgress: 1,
+      totalProgress: null,
+    });
+    const second = makeEntry({
+      id: "second",
+      title: "可操作条目",
+      currentProgress: 2,
+      totalProgress: 10,
+    });
+    const pendingFirst = createDeferred<MediaEntry>();
+    const updatedSecond = makeEntry({
+      ...second,
+      currentProgress: 3,
+      updatedAt: "2026-11-17T13:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([first, second]);
+    mockedAdjustProgress.mockImplementation((id) =>
+      id === first.id
+        ? pendingFirst.promise
+        : Promise.resolve(updatedSecond),
+    );
+    render(<App />);
+
+    const firstCard = await screen.findByRole("article", { name: first.title });
+    const secondCard = screen.getByRole("article", { name: second.title });
+    const firstIncrement = within(firstCard).getByRole("button", {
+      name: `《${first.title}》进度加一`,
+    });
+    await user.click(firstIncrement);
+
+    expect(
+      within(firstCard).getByRole("status"),
+    ).toHaveTextContent(`正在更新《${first.title}》`);
+    expect(firstIncrement).toBeDisabled();
+    expect(
+      within(firstCard).getByRole("button", {
+        name: `《${first.title}》进度减一`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(firstCard).getByRole("button", {
+        name: `标记《${first.title}》完成`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(firstCard).getByRole("button", {
+        name: `编辑《${first.title}》`,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(firstCard).getByRole("button", {
+        name: `删除《${first.title}》`,
+      }),
+    ).toBeDisabled();
+
+    await user.click(firstIncrement);
+    const secondIncrement = within(secondCard).getByRole("button", {
+      name: `《${second.title}》进度加一`,
+    });
+    expect(secondIncrement).toBeEnabled();
+    await user.click(secondIncrement);
+    expect(await within(secondCard).findByText("3 / 10 集")).toBeInTheDocument();
+
+    await act(async () => {
+      pendingFirst.resolve(
+        makeEntry({
+          ...first,
+          currentProgress: 2,
+          updatedAt: "2026-11-17T14:00:00.000Z",
+        }),
+      );
+      await pendingFirst.promise;
+    });
+
+    expect(await within(firstCard).findByText("2 集")).toBeInTheDocument();
+    expect(within(firstCard).queryByRole("status")).toBeNull();
+    expect(
+      mockedAdjustProgress.mock.calls.filter(([id]) => id === first.id),
+    ).toHaveLength(1);
+    expect(mockedAdjustProgress).toHaveBeenCalledWith(second.id, 1);
   });
 });
 

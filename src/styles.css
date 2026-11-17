@@ -526,6 +526,76 @@ svg {
   stroke-linejoin: round;
 }
 
+.quick-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.quick-progress__steps {
+  display: flex;
+  gap: 8px;
+}
+
+.quick-progress__step,
+.quick-progress__status {
+  min-height: 44px;
+  border: 1px solid #cbd5c9;
+  border-radius: 9px;
+  color: #3f6250;
+  background: #f5f7f0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.quick-progress__step {
+  display: inline-flex;
+  min-width: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-progress__step span:first-child {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.quick-progress__status {
+  padding: 8px 13px;
+}
+
+.quick-progress__step:hover:not(:disabled),
+.quick-progress__status:hover:not(:disabled) {
+  border-color: #91a990;
+  background: #e9efe4;
+}
+
+.entry-card__write-status,
+.entry-card__write-error {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.entry-card__write-status {
+  color: #5d7164;
+}
+
+.entry-card__write-error {
+  color: #995041;
+}
+
 .entry-card__footer {
   display: flex;
   min-width: 0;

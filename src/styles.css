@@ -429,6 +429,18 @@ svg {
   display: none;
 }
 
+.topbar__actions {
+  grid-area: add;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.topbar__trash-button {
+  display: none;
+}
+
 /* ---------- Buttons ---------- */
 
 .primary-button,
@@ -503,6 +515,38 @@ svg {
 .ghost-button:hover:not(:disabled) {
   background: var(--surface-muted);
   color: var(--text);
+}
+
+.ghost-button--danger {
+  color: var(--danger);
+}
+
+.ghost-button--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.danger-outline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.danger-outline-button:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.danger-outline-button:disabled {
+  opacity: 0.45;
 }
 
 .icon-button {
@@ -585,6 +629,31 @@ svg {
   color: var(--text-tertiary);
 }
 
+/* ---------- Trash ---------- */
+
+.trash-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+
+.trash-toolbar__count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.trash-note {
+  padding: 0 2px 10px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.content-state--trash {
+  min-height: 280px;
+}
+
 /* ---------- Entry list ---------- */
 
 .entry-list {
@@ -662,6 +731,18 @@ svg {
 .entry__tile--short_drama {
   background: #fbece2;
   color: #b25f2a;
+}
+
+.entry__trash-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.entry__restore-button {
+  height: 26px;
 }
 
 .entry__tile--cover {
@@ -1371,6 +1452,49 @@ kbd {
   .add-button svg {
     width: 18px;
     height: 18px;
+  }
+
+  .topbar__trash-button {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: var(--surface-muted);
+  }
+
+  .topbar__trash-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .trash-toolbar {
+    padding: 0 2px 8px;
+  }
+
+  .trash-toolbar__count {
+    font-size: 13px;
+  }
+
+  .trash-note {
+    font-size: 12px;
+  }
+
+  .danger-outline-button {
+    height: 34px;
+    padding: 0 12px;
+    font-size: 12.5px;
+  }
+
+  .entry__trash-actions {
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .entry__restore-button,
+  .entry__trash-actions .ghost-button {
+    height: 34px;
+    padding: 0 12px;
+    font-size: 12.5px;
   }
 
   .search-field {

@@ -12,8 +12,12 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  emptyTrash,
   getLibraryErrorMessage,
   listEntries,
+  listTrash,
+  purgeEntry,
+  restoreEntry,
   setEntryStatus,
   updateEntry,
 } from "./api";
@@ -31,6 +35,8 @@ type LibraryState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "success"; entries: MediaEntry[] };
+
+type AppView = "library" | "trash";
 
 const updatedAtFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
@@ -204,6 +210,20 @@ function NoResultsState({ onClear }: { onClear: () => void }) {
       <button className="secondary-button" type="button" onClick={onClear}>
         清除搜索和筛选
       </button>
+    </div>
+  );
+}
+
+function TrashEmptyState() {
+  return (
+    <div className="content-state content-state--empty content-state--trash">
+      <span className="content-state__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4 6h16M9 3h6M6.5 6l.9 14h9.2l.9-14M10 10v6M14 10v6" />
+        </svg>
+      </span>
+      <h3>回收站是空的</h3>
+      <p>删除的条目会先放在这里，30 天后自动清除。</p>
     </div>
   );
 }
@@ -984,31 +1004,127 @@ function DeleteEntryDialog({
   );
 }
 
+function ConfirmActionDialog({
+  title,
+  titleId,
+  description,
+  confirmLabel,
+  busyLabel,
+  fallbackError,
+  fallbackFocusRef,
+  onClose,
+  onConfirm,
+}: {
+  title: string;
+  titleId: string;
+  description: ReactNode;
+  confirmLabel: string;
+  busyLabel: string;
+  fallbackError: string;
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  async function handleConfirm() {
+    if (busyRef.current) {
+      return;
+    }
+
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (actionError) {
+      setError(getWriteErrorMessage(actionError, fallbackError));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      title={title}
+      titleId={titleId}
+      busy={busy}
+      initialFocusRef={cancelRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--confirm"
+    >
+      <div className="dialog__body">
+        <p className="dialog__description">{description}</p>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <div className="dialog__actions">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={busy}
+          ref={cancelRef}
+          onClick={onClose}
+        >
+          取消
+        </button>
+        <button
+          className="danger-button"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            void handleConfirm();
+          }}
+        >
+          {busy ? busyLabel : confirmLabel}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function Sidebar({
   entries,
+  view,
+  trashCount,
   statusFilter,
   mediaTypeFilter,
   onStatusFilter,
   onMediaTypeFilter,
+  onOpenTrash,
 }: {
   entries: MediaEntry[];
+  view: AppView;
+  trashCount: number;
   statusFilter: MediaEntry["status"] | "all";
   mediaTypeFilter: MediaType | "all";
   onStatusFilter: (status: MediaEntry["status"] | "all") => void;
   onMediaTypeFilter: (type: MediaType | "all") => void;
+  onOpenTrash: () => void;
 }) {
   const counts = useMemo(() => {
     const byType = Object.fromEntries(
       MEDIA_TYPES.map((type) => [type, 0]),
     ) as Record<MediaType, number>;
     let completed = 0;
+    let tracking = 0;
     for (const entry of entries) {
       byType[entry.mediaType] += 1;
       if (entry.status === "completed") {
         completed += 1;
+      } else if (entry.status === "tracking") {
+        tracking += 1;
       }
     }
-    return { byType, completed, tracking: entries.length - completed };
+    return { byType, completed, tracking };
   }, [entries]);
 
   return (
@@ -1026,7 +1142,7 @@ function Sidebar({
         <button
           className="sidebar__item"
           type="button"
-          aria-pressed={statusFilter === "all"}
+          aria-pressed={view === "library" && statusFilter === "all"}
           onClick={() => onStatusFilter("all")}
         >
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -1038,7 +1154,7 @@ function Sidebar({
         <button
           className="sidebar__item"
           type="button"
-          aria-pressed={statusFilter === "tracking"}
+          aria-pressed={view === "library" && statusFilter === "tracking"}
           onClick={() => onStatusFilter("tracking")}
         >
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -1051,7 +1167,7 @@ function Sidebar({
         <button
           className="sidebar__item"
           type="button"
-          aria-pressed={statusFilter === "completed"}
+          aria-pressed={view === "library" && statusFilter === "completed"}
           onClick={() => onStatusFilter("completed")}
         >
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -1068,7 +1184,7 @@ function Sidebar({
             className="sidebar__item"
             type="button"
             key={type}
-            aria-pressed={mediaTypeFilter === type}
+            aria-pressed={view === "library" && mediaTypeFilter === type}
             onClick={() =>
               onMediaTypeFilter(mediaTypeFilter === type ? "all" : type)
             }
@@ -1078,6 +1194,20 @@ function Sidebar({
             <span className="sidebar__count">{counts.byType[type]}</span>
           </button>
         ))}
+
+        <p className="sidebar__section">回收站</p>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={view === "trash"}
+          onClick={onOpenTrash}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3.5 5.5h13M8 3h4M5.5 5.5 6.2 17h7.6l.7-11.5M8.3 8.5v5M11.7 8.5v5" />
+          </svg>
+          <span className="sidebar__label">回收站</span>
+          <span className="sidebar__count">{trashCount}</span>
+        </button>
       </nav>
 
       <div className="sidebar__footer">
@@ -1092,7 +1222,9 @@ function SummaryStrip({ entries }: { entries: MediaEntry[] }) {
   const completedCount = entries.filter(
     (entry) => entry.status === "completed",
   ).length;
-  const trackingCount = entries.length - completedCount;
+  const trackingCount = entries.filter(
+    (entry) => entry.status === "tracking",
+  ).length;
 
   return (
     <section className="summary-strip" aria-label="内容库摘要">
@@ -1149,17 +1281,21 @@ type EntryWriteAction =
 function EntryRow({
   entry,
   pending,
+  pendingLabel = "正在更新",
   error,
   onWrite,
   onEdit,
   onDelete,
+  trashActions,
 }: {
   entry: MediaEntry;
   pending: boolean;
+  pendingLabel?: string;
   error: string | null;
-  onWrite: (action: EntryWriteAction) => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onWrite?: (action: EntryWriteAction) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  trashActions?: { onRestore: () => void; onPurge: () => void };
 }) {
   const percentage = getProgressPercentage(entry);
   const titleId = `entry-title-${entry.id}`;
@@ -1176,7 +1312,7 @@ function EntryRow({
         aria-labelledby={titleId}
         aria-busy={pending}
         onDoubleClick={(event) => {
-          if ((event.target as HTMLElement).closest("button")) {
+          if (!onEdit || (event.target as HTMLElement).closest("button")) {
             return;
           }
           onEdit();
@@ -1223,7 +1359,7 @@ function EntryRow({
           </div>
           {pending ? (
             <p className="entry__write-status" role="status">
-              正在更新《{entry.title}》…
+              {pendingLabel}《{entry.title}》…
             </p>
           ) : null}
           {error ? (
@@ -1255,70 +1391,100 @@ function EntryRow({
         </div>
 
         <div className="entry__actions">
-          <div className="stepper" role="group" aria-label={`${entry.title}的快捷操作`}>
-            <button
-              className="stepper__button"
-              type="button"
-              aria-label={`《${entry.title}》进度减一`}
-              disabled={decrementDisabled}
-              onClick={() => onWrite({ type: "progress", delta: -1 })}
-            >
-              −
-            </button>
-            <button
-              className="stepper__button"
-              type="button"
-              aria-label={`《${entry.title}》进度加一`}
-              disabled={incrementDisabled}
-              onClick={() => onWrite({ type: "progress", delta: 1 })}
-            >
-              +
-            </button>
-          </div>
-          <button
-            className="ghost-button"
-            type="button"
-            aria-label={
-              entry.status === "completed"
-                ? `重新追更《${entry.title}》`
-                : `标记《${entry.title}》完成`
-            }
-            disabled={pending}
-            onClick={() =>
-              onWrite({
-                type: "status",
-                status: entry.status === "completed" ? "tracking" : "completed",
-              })
-            }
-          >
-            {entry.status === "completed" ? "重新追更" : "标记完成"}
-          </button>
-          <div className="entry__icon-actions">
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={`编辑《${entry.title}》`}
-              title="编辑"
-              disabled={pending}
-              onClick={onEdit}
-            >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="m12.8 3.8 3.4 3.4M4 16l1-4L14 3a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2l-9 9-4 1Z" />
-              </svg>
-            </button>
-            <button
-              className="icon-button icon-button--danger"
-              type="button"
-              aria-label={`删除《${entry.title}》`}
-              title="删除"
-              disabled={pending}
-              onClick={onDelete}
-            >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M3 5h14M8 2.5h4M6 5l.7 12h6.6L14 5M8.5 8v6M11.5 8v6" />
-              </svg>
-            </button>
-          </div>
+          {trashActions ? (
+            <div className="entry__trash-actions">
+              <button
+                className="secondary-button entry__restore-button"
+                type="button"
+                aria-label={`恢复《${entry.title}》`}
+                disabled={pending}
+                onClick={trashActions.onRestore}
+              >
+                恢复
+              </button>
+              <button
+                className="ghost-button ghost-button--danger"
+                type="button"
+                aria-label={`彻底删除《${entry.title}》`}
+                disabled={pending}
+                onClick={trashActions.onPurge}
+              >
+                彻底删除
+              </button>
+            </div>
+          ) : (
+            <>
+              <div
+                className="stepper"
+                role="group"
+                aria-label={`${entry.title}的快捷操作`}
+              >
+                <button
+                  className="stepper__button"
+                  type="button"
+                  aria-label={`《${entry.title}》进度减一`}
+                  disabled={decrementDisabled}
+                  onClick={() => onWrite?.({ type: "progress", delta: -1 })}
+                >
+                  −
+                </button>
+                <button
+                  className="stepper__button"
+                  type="button"
+                  aria-label={`《${entry.title}》进度加一`}
+                  disabled={incrementDisabled}
+                  onClick={() => onWrite?.({ type: "progress", delta: 1 })}
+                >
+                  +
+                </button>
+              </div>
+              <button
+                className="ghost-button"
+                type="button"
+                aria-label={
+                  entry.status === "completed"
+                    ? `重新追更《${entry.title}》`
+                    : `标记《${entry.title}》完成`
+                }
+                disabled={pending}
+                onClick={() =>
+                  onWrite?.({
+                    type: "status",
+                    status:
+                      entry.status === "completed" ? "tracking" : "completed",
+                  })
+                }
+              >
+                {entry.status === "completed" ? "重新追更" : "标记完成"}
+              </button>
+              <div className="entry__icon-actions">
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={`编辑《${entry.title}》`}
+                  title="编辑"
+                  disabled={pending}
+                  onClick={onEdit}
+                >
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path d="m12.8 3.8 3.4 3.4M4 16l1-4L14 3a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2l-9 9-4 1Z" />
+                  </svg>
+                </button>
+                <button
+                  className="icon-button icon-button--danger"
+                  type="button"
+                  aria-label={`删除《${entry.title}》`}
+                  title="删除"
+                  disabled={pending}
+                  onClick={onDelete}
+                >
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path d="M3 5h14M8 2.5h4M6 5l.7 12h6.6L14 5M8.5 8v6M11.5 8v6" />
+                  </svg>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </article>
     </li>
@@ -1335,14 +1501,24 @@ function sortEntries(entries: MediaEntry[]): MediaEntry[] {
 
 function App() {
   const [library, setLibrary] = useState<LibraryState>({ status: "loading" });
+  const [view, setView] = useState<AppView>("library");
+  const [trash, setTrash] = useState<LibraryState>({ status: "loading" });
   const [editor, setEditor] = useState<EditorState>(null);
   const [pendingDeletion, setPendingDeletion] = useState<MediaEntry | null>(
     null,
   );
+  const [pendingPurge, setPendingPurge] = useState<MediaEntry | null>(null);
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
   const [pendingEntryWrites, setPendingEntryWrites] = useState<Set<string>>(
     () => new Set(),
   );
   const [entryWriteErrors, setEntryWriteErrors] = useState<
+    Record<string, string>
+  >({});
+  const [pendingTrashWrites, setPendingTrashWrites] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [trashWriteErrors, setTrashWriteErrors] = useState<
     Record<string, string>
   >({});
   const [titleQuery, setTitleQuery] = useState("");
@@ -1353,12 +1529,18 @@ function App() {
     MediaEntry["status"] | "all"
   >("all");
   const latestRequest = useRef(0);
+  const trashRequest = useRef(0);
   const entryWriteLocks = useRef(new Set<string>());
+  const trashWriteLocks = useRef(new Set<string>());
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const dialogOpenRef = useRef(false);
 
-  dialogOpenRef.current = editor !== null || pendingDeletion !== null;
+  dialogOpenRef.current =
+    editor !== null ||
+    pendingDeletion !== null ||
+    pendingPurge !== null ||
+    emptyTrashOpen;
 
   function handleEntryUpdated(updatedEntry: MediaEntry) {
     setLibrary((current) => ({
@@ -1432,6 +1614,7 @@ function App() {
         : current,
     );
     setPendingDeletion(null);
+    void loadTrash();
   }
 
   const loadEntries = useCallback(async () => {
@@ -1453,13 +1636,106 @@ function App() {
     }
   }, []);
 
+  const loadTrash = useCallback(async () => {
+    const requestId = ++trashRequest.current;
+    setTrash({ status: "loading" });
+
+    try {
+      const entries = await listTrash();
+      if (requestId === trashRequest.current) {
+        setTrash({ status: "success", entries });
+      }
+    } catch (error) {
+      if (requestId === trashRequest.current) {
+        setTrash({
+          status: "error",
+          message: getLibraryErrorMessage(error),
+        });
+      }
+    }
+  }, []);
+
+  async function handleRestore(entry: MediaEntry) {
+    if (trashWriteLocks.current.has(entry.id)) {
+      return;
+    }
+
+    trashWriteLocks.current.add(entry.id);
+    setPendingTrashWrites((current) => new Set(current).add(entry.id));
+    setTrashWriteErrors((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
+
+    try {
+      const restoredEntry = await restoreEntry(entry.id);
+      setTrash((current) =>
+        current.status === "success"
+          ? {
+              status: "success",
+              entries: current.entries.filter((item) => item.id !== entry.id),
+            }
+          : current,
+      );
+      handleEntryUpdated(restoredEntry);
+    } catch (writeError) {
+      setTrashWriteErrors((current) => ({
+        ...current,
+        [entry.id]: `恢复《${entry.title}》失败。${getWriteErrorMessage(
+          writeError,
+          "请重试。",
+        )}`,
+      }));
+    } finally {
+      trashWriteLocks.current.delete(entry.id);
+      setPendingTrashWrites((current) => {
+        const next = new Set(current);
+        next.delete(entry.id);
+        return next;
+      });
+    }
+  }
+
+  async function handlePurge() {
+    if (!pendingPurge) {
+      return;
+    }
+
+    const target = pendingPurge;
+    await purgeEntry(target.id);
+    setTrash((current) =>
+      current.status === "success"
+        ? {
+            status: "success",
+            entries: current.entries.filter((entry) => entry.id !== target.id),
+          }
+        : current,
+    );
+    setTrashWriteErrors((current) => {
+      const next = { ...current };
+      delete next[target.id];
+      return next;
+    });
+    setPendingPurge(null);
+  }
+
+  async function handleEmptyTrash() {
+    await emptyTrash();
+    setTrash({ status: "success", entries: [] });
+    setTrashWriteErrors({});
+    setEmptyTrashOpen(false);
+  }
+
   useEffect(() => {
     void loadEntries();
+    void loadTrash();
 
     return () => {
       latestRequest.current += 1;
+      trashRequest.current += 1;
     };
-  }, [loadEntries]);
+  }, [loadEntries, loadTrash]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1517,17 +1793,22 @@ function App() {
     };
   }, []);
 
+  const isTrashView = view === "trash";
   const normalizedTitleQuery = titleQuery.trim().toLowerCase();
+  const allEntries = library.status === "success" ? library.entries : [];
+  const trashEntries = trash.status === "success" ? trash.entries : [];
+  const sourceEntries = isTrashView ? trashEntries : allEntries;
   const hasActiveFilters =
     normalizedTitleQuery.length > 0 ||
     mediaTypeFilter !== "all" ||
-    statusFilter !== "all";
-  const allEntries = library.status === "success" ? library.entries : [];
-  const visibleEntries = allEntries.filter(
+    (!isTrashView && statusFilter !== "all");
+  const visibleEntries = sourceEntries.filter(
     (entry) =>
       entry.title.toLowerCase().includes(normalizedTitleQuery) &&
       (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
-      (statusFilter === "all" || entry.status === statusFilter),
+      (isTrashView ||
+        statusFilter === "all" ||
+        entry.status === statusFilter),
   );
 
   function clearFilters() {
@@ -1540,27 +1821,41 @@ function App() {
     <div className="app-shell">
       <Sidebar
         entries={allEntries}
+        view={view}
+        trashCount={trashEntries.length}
         statusFilter={statusFilter}
         mediaTypeFilter={mediaTypeFilter}
-        onStatusFilter={(status) =>
-          setStatusFilter((current) => (current === status ? "all" : status))
-        }
-        onMediaTypeFilter={setMediaTypeFilter}
+        onStatusFilter={(status) => {
+          setView("library");
+          setStatusFilter((current) => (current === status ? "all" : status));
+        }}
+        onMediaTypeFilter={(type) => {
+          setView("library");
+          setMediaTypeFilter(type);
+        }}
+        onOpenTrash={() => setView("trash")}
       />
 
       <div className="app-main">
         <header className="topbar">
-          <div className="mobile-brand" aria-label="追更 CatchUp">
+          <div
+            className="mobile-brand"
+            aria-label={isTrashView ? "回收站" : "追更 CatchUp"}
+          >
             <BrandMark size={24} />
-            <strong>追更</strong>
+            <strong>{isTrashView ? "回收站" : "追更"}</strong>
           </div>
 
           <div className="topbar__title">
-            <h1>内容库</h1>
+            <h1>{isTrashView ? "回收站" : "内容库"}</h1>
             <p>
-              {library.status === "success"
-                ? `${library.entries.length} 个条目`
-                : "本地收藏"}
+              {isTrashView
+                ? trash.status === "success"
+                  ? `${trashEntries.length} 个条目`
+                  : "回收站"
+                : library.status === "success"
+                  ? `${library.entries.length} 个条目`
+                  : "本地收藏"}
             </p>
           </div>
 
@@ -1603,26 +1898,30 @@ function App() {
               ))}
             </select>
 
-            <label className="sr-only" htmlFor="library-status-filter">
-              状态筛选
-            </label>
-            <select
-              id="library-status-filter"
-              className="compact-select"
-              value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(
-                  event.target.value as MediaEntry["status"] | "all",
-                )
-              }
-            >
-              <option value="all">全部状态</option>
-              {ENTRY_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {ENTRY_STATUS_LABELS[status]}
-                </option>
-              ))}
-            </select>
+            {!isTrashView ? (
+              <>
+                <label className="sr-only" htmlFor="library-status-filter">
+                  状态筛选
+                </label>
+                <select
+                  id="library-status-filter"
+                  className="compact-select"
+                  value={statusFilter}
+                  onChange={(event) =>
+                    setStatusFilter(
+                      event.target.value as MediaEntry["status"] | "all",
+                    )
+                  }
+                >
+                  <option value="all">全部状态</option>
+                  {ENTRY_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {ENTRY_STATUS_LABELS[status]}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
 
             {hasActiveFilters && visibleEntries.length > 0 ? (
               <button
@@ -1635,63 +1934,147 @@ function App() {
             ) : null}
           </div>
 
-          <button
-            className="primary-button add-button"
-            type="button"
-            ref={addButtonRef}
-            aria-label="添加条目"
-            disabled={library.status === "loading"}
-            onClick={() => setEditor({ mode: "create" })}
-          >
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M10 4v12M4 10h12" />
-            </svg>
-            <span>添加条目</span>
-          </button>
+          <div className="topbar__actions">
+            <button
+              className="icon-button topbar__trash-button"
+              type="button"
+              aria-label="回收站"
+              aria-pressed={isTrashView}
+              onClick={() =>
+                setView((current) =>
+                  current === "trash" ? "library" : "trash",
+                )
+              }
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M3.5 5.5h13M8 3h4M5.5 5.5 6.2 17h7.6l.7-11.5M8.3 8.5v5M11.7 8.5v5" />
+              </svg>
+            </button>
+
+            {!isTrashView ? (
+              <button
+                className="primary-button add-button"
+                type="button"
+                ref={addButtonRef}
+                aria-label="添加条目"
+                disabled={library.status === "loading"}
+                onClick={() => setEditor({ mode: "create" })}
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M10 4v12M4 10h12" />
+                </svg>
+                <span>添加条目</span>
+              </button>
+            ) : null}
+          </div>
         </header>
 
         <div className="app-content">
-          {library.status === "success" && library.entries.length > 0 ? (
-            <SummaryStrip entries={library.entries} />
-          ) : null}
+          {isTrashView ? (
+            <>
+              <div className="trash-toolbar">
+                <p className="trash-toolbar__count">
+                  {trash.status === "success"
+                    ? `${trashEntries.length} 个条目`
+                    : "回收站"}
+                </p>
+                <button
+                  className="danger-outline-button"
+                  type="button"
+                  disabled={
+                    trash.status !== "success" || trashEntries.length === 0
+                  }
+                  onClick={() => setEmptyTrashOpen(true)}
+                >
+                  清空回收站
+                </button>
+              </div>
+              <p className="trash-note">
+                回收站中的条目会在 30 天后自动清除
+              </p>
 
-          {library.status === "loading" ? (
-            <LoadingState />
-          ) : library.status === "error" ? (
-            <ErrorState
-              message={library.message}
-              onRetry={() => {
-                void loadEntries();
-              }}
-            />
-          ) : library.entries.length === 0 ? (
-            <EmptyState onAdd={() => setEditor({ mode: "create" })} />
-          ) : visibleEntries.length > 0 ? (
-            <ul className="entry-list" aria-label="追更内容列表">
-              {visibleEntries.map((entry) => (
-                <EntryRow
-                  entry={entry}
-                  key={entry.id}
-                  pending={pendingEntryWrites.has(entry.id)}
-                  error={entryWriteErrors[entry.id] ?? null}
-                  onWrite={(action) => {
-                    void handleEntryWrite(entry, action);
+              {trash.status === "loading" ? (
+                <LoadingState />
+              ) : trash.status === "error" ? (
+                <ErrorState
+                  message={trash.message}
+                  onRetry={() => {
+                    void loadTrash();
                   }}
-                  onEdit={() => setEditor({ mode: "edit", entry })}
-                  onDelete={() => setPendingDeletion(entry)}
                 />
-              ))}
-            </ul>
+              ) : trashEntries.length === 0 ? (
+                <TrashEmptyState />
+              ) : visibleEntries.length > 0 ? (
+                <ul className="entry-list" aria-label="回收站列表">
+                  {visibleEntries.map((entry) => (
+                    <EntryRow
+                      key={entry.id}
+                      entry={entry}
+                      pending={pendingTrashWrites.has(entry.id)}
+                      pendingLabel="正在恢复"
+                      error={trashWriteErrors[entry.id] ?? null}
+                      trashActions={{
+                        onRestore: () => {
+                          void handleRestore(entry);
+                        },
+                        onPurge: () => setPendingPurge(entry),
+                      }}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <NoResultsState onClear={clearFilters} />
+              )}
+            </>
           ) : (
-            <NoResultsState onClear={clearFilters} />
+            <>
+              {library.status === "success" && library.entries.length > 0 ? (
+                <SummaryStrip entries={library.entries} />
+              ) : null}
+
+              {library.status === "loading" ? (
+                <LoadingState />
+              ) : library.status === "error" ? (
+                <ErrorState
+                  message={library.message}
+                  onRetry={() => {
+                    void loadEntries();
+                  }}
+                />
+              ) : library.entries.length === 0 ? (
+                <EmptyState onAdd={() => setEditor({ mode: "create" })} />
+              ) : visibleEntries.length > 0 ? (
+                <ul className="entry-list" aria-label="追更内容列表">
+                  {visibleEntries.map((entry) => (
+                    <EntryRow
+                      entry={entry}
+                      key={entry.id}
+                      pending={pendingEntryWrites.has(entry.id)}
+                      error={entryWriteErrors[entry.id] ?? null}
+                      onWrite={(action) => {
+                        void handleEntryWrite(entry, action);
+                      }}
+                      onEdit={() => setEditor({ mode: "edit", entry })}
+                      onDelete={() => setPendingDeletion(entry)}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <NoResultsState onClear={clearFilters} />
+              )}
+            </>
           )}
         </div>
 
         <footer className="statusbar">
           <span>
-            {library.status === "success"
-              ? `共 ${library.entries.length} 项 · 已保存到本机`
-              : "追更 · CatchUp"}
+            {isTrashView
+              ? trash.status === "success"
+                ? `回收站 ${trashEntries.length} 项 · 30 天后自动清除`
+                : "回收站"
+              : library.status === "success"
+                ? `共 ${library.entries.length} 项 · 已保存到本机`
+                : "追更 · CatchUp"}
           </span>
           <span className="statusbar__hints">
             <kbd>Ctrl</kbd>+<kbd>N</kbd> 新建
@@ -1707,8 +2090,11 @@ function App() {
         <button
           className="tabbar__item"
           type="button"
-          aria-pressed={statusFilter === "all"}
-          onClick={() => setStatusFilter("all")}
+          aria-pressed={view === "library" && statusFilter === "all"}
+          onClick={() => {
+            setView("library");
+            setStatusFilter("all");
+          }}
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 6.5h16M4 12h16M4 17.5h16" />
@@ -1718,8 +2104,11 @@ function App() {
         <button
           className="tabbar__item"
           type="button"
-          aria-pressed={statusFilter === "tracking"}
-          onClick={() => setStatusFilter("tracking")}
+          aria-pressed={view === "library" && statusFilter === "tracking"}
+          onClick={() => {
+            setView("library");
+            setStatusFilter("tracking");
+          }}
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="8.5" />
@@ -1730,8 +2119,11 @@ function App() {
         <button
           className="tabbar__item"
           type="button"
-          aria-pressed={statusFilter === "completed"}
-          onClick={() => setStatusFilter("completed")}
+          aria-pressed={view === "library" && statusFilter === "completed"}
+          onClick={() => {
+            setView("library");
+            setStatusFilter("completed");
+          }}
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="8.5" />
@@ -1756,6 +2148,40 @@ function App() {
           fallbackFocusRef={addButtonRef}
           onClose={() => setPendingDeletion(null)}
           onDeleted={handleDeleted}
+        />
+      ) : null}
+      {pendingPurge ? (
+        <ConfirmActionDialog
+          title="彻底删除条目"
+          titleId="purge-entry-title"
+          description={
+            <>
+              确定要彻底删除
+              <strong className="delete-entry__title">
+                《{pendingPurge.title}》
+              </strong>
+              吗？删除后将无法恢复。
+            </>
+          }
+          confirmLabel="彻底删除"
+          busyLabel="删除中…"
+          fallbackError="彻底删除失败，请重试。"
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setPendingPurge(null)}
+          onConfirm={handlePurge}
+        />
+      ) : null}
+      {emptyTrashOpen ? (
+        <ConfirmActionDialog
+          title="清空回收站"
+          titleId="empty-trash-title"
+          description={`清空回收站会彻底删除其中的 ${trashEntries.length} 个条目，且无法恢复。确定继续吗？`}
+          confirmLabel="清空回收站"
+          busyLabel="清空中…"
+          fallbackError="清空回收站失败，请重试。"
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setEmptyTrashOpen(false)}
+          onConfirm={handleEmptyTrash}
         />
       ) : null}
     </div>

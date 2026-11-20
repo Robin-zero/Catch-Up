@@ -5,7 +5,11 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  emptyTrash,
   listEntries,
+  listTrash,
+  purgeEntry,
+  restoreEntry,
   setEntryStatus,
   updateEntry,
 } from "./api";
@@ -14,9 +18,13 @@ import type { MediaEntry, MediaType } from "./types";
 
 vi.mock("./api", () => ({
   listEntries: vi.fn(),
+  listTrash: vi.fn(),
   createEntry: vi.fn(),
   updateEntry: vi.fn(),
   deleteEntry: vi.fn(),
+  restoreEntry: vi.fn(),
+  purgeEntry: vi.fn(),
+  emptyTrash: vi.fn(),
   adjustProgress: vi.fn(),
   setEntryStatus: vi.fn(),
   getLibraryErrorMessage: vi.fn(
@@ -25,9 +33,13 @@ vi.mock("./api", () => ({
 }));
 
 const mockedListEntries = vi.mocked(listEntries);
+const mockedListTrash = vi.mocked(listTrash);
 const mockedCreateEntry = vi.mocked(createEntry);
 const mockedUpdateEntry = vi.mocked(updateEntry);
 const mockedDeleteEntry = vi.mocked(deleteEntry);
+const mockedRestoreEntry = vi.mocked(restoreEntry);
+const mockedPurgeEntry = vi.mocked(purgeEntry);
+const mockedEmptyTrash = vi.mocked(emptyTrash);
 const mockedAdjustProgress = vi.mocked(adjustProgress);
 const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 
@@ -55,9 +67,14 @@ function createDeferred<T>() {
 
 beforeEach(() => {
   mockedListEntries.mockReset();
+  mockedListTrash.mockReset();
+  mockedListTrash.mockResolvedValue([]);
   mockedCreateEntry.mockReset();
   mockedUpdateEntry.mockReset();
   mockedDeleteEntry.mockReset();
+  mockedRestoreEntry.mockReset();
+  mockedPurgeEntry.mockReset();
+  mockedEmptyTrash.mockReset();
   mockedAdjustProgress.mockReset();
   mockedSetEntryStatus.mockReset();
 });
@@ -65,6 +82,7 @@ beforeEach(() => {
 describe("内容库", () => {
   it("启动时显示明确的加载状态", () => {
     mockedListEntries.mockReturnValue(new Promise(() => {}));
+    mockedListTrash.mockReturnValue(new Promise(() => {}));
 
     render(<App />);
 
@@ -1142,6 +1160,306 @@ describe("条目管理", () => {
     await user.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("article", { name: target.title })).toBeVisible();
+  });
+});
+
+describe("回收站", () => {
+  it("从侧边栏进入回收站，显示数量与操作，并隐藏新增按钮和状态筛选", async () => {
+    const user = userEvent.setup();
+    const trashed = makeEntry({ id: "trash-1", title: "回收的剧" });
+    mockedListEntries.mockResolvedValue([makeEntry({ title: "库里的剧" })]);
+    mockedListTrash.mockResolvedValue([trashed]);
+
+    render(<App />);
+
+    await screen.findByRole("article", { name: "库里的剧" });
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "回收站" }),
+    ).toBeInTheDocument();
+    const list = await screen.findByRole("list", { name: "回收站列表" });
+    expect(
+      within(list).getByRole("article", { name: "回收的剧" }),
+    ).toBeVisible();
+    expect(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    ).toHaveTextContent("1");
+    expect(
+      screen.getByText("回收站中的条目会在 30 天后自动清除"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("类型筛选")).toBeInTheDocument();
+    expect(screen.queryByLabelText("状态筛选")).toBeNull();
+    expect(screen.queryByRole("button", { name: "添加条目" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "回收站" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "清空回收站" }),
+    ).toBeInTheDocument();
+    expect(
+      within(list).getByRole("button", { name: "恢复《回收的剧》" }),
+    ).toBeInTheDocument();
+    expect(
+      within(list).getByRole("button", { name: "彻底删除《回收的剧》" }),
+    ).toBeInTheDocument();
+  });
+
+  it("恢复条目后从回收站移除，并按更新时间回到主库", async () => {
+    const user = userEvent.setup();
+    const older = makeEntry({
+      id: "older",
+      title: "较早的剧",
+      updatedAt: "2026-11-10T01:30:00.000Z",
+    });
+    const restored = makeEntry({
+      id: "restore-1",
+      title: "恢复的剧",
+      updatedAt: "2026-11-19T01:30:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([older]);
+    mockedListTrash.mockResolvedValue([restored]);
+    mockedRestoreEntry.mockResolvedValue(restored);
+
+    render(<App />);
+
+    await screen.findByRole("article", { name: "较早的剧" });
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    const list = await screen.findByRole("list", { name: "回收站列表" });
+    await user.click(
+      within(list).getByRole("button", { name: "恢复《恢复的剧》" }),
+    );
+
+    expect(mockedRestoreEntry).toHaveBeenCalledWith("restore-1");
+    expect(
+      await screen.findByRole("heading", { name: "回收站是空的" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "回收站列表" })).toBeNull();
+    expect(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    ).toHaveTextContent("0");
+
+    await user.click(
+      within(sidebar).getByRole("button", { name: /全部条目/ }),
+    );
+    const libraryList = await screen.findByRole("list", {
+      name: "追更内容列表",
+    });
+    const articles = within(libraryList).getAllByRole("article");
+    expect(articles).toHaveLength(2);
+    expect(articles[0]).toHaveTextContent("恢复的剧");
+    expect(articles[1]).toHaveTextContent("较早的剧");
+  });
+
+  it("彻底删除需要二次确认，取消后条目和数据保持不变", async () => {
+    const user = userEvent.setup();
+    const trashed = makeEntry({ id: "purge-1", title: "要删的剧" });
+    mockedListEntries.mockResolvedValue([]);
+    mockedListTrash.mockResolvedValue([trashed]);
+
+    render(<App />);
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    const list = await screen.findByRole("list", { name: "回收站列表" });
+    await user.click(
+      within(list).getByRole("button", { name: "彻底删除《要删的剧》" }),
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "彻底删除条目" });
+    expect(dialog).toHaveTextContent("删除后将无法恢复");
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mockedPurgeEntry).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("article", { name: "要删的剧" }),
+    ).toBeVisible();
+  });
+
+  it("确认彻底删除后从列表和侧边栏计数中移除", async () => {
+    const user = userEvent.setup();
+    const target = makeEntry({ id: "purge-2", title: "确认删除的剧" });
+    const keep = makeEntry({ id: "keep-1", title: "保留的剧" });
+    mockedListEntries.mockResolvedValue([]);
+    mockedListTrash.mockResolvedValue([target, keep]);
+    mockedPurgeEntry.mockResolvedValue(undefined);
+
+    render(<App />);
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    const list = await screen.findByRole("list", { name: "回收站列表" });
+    await user.click(
+      within(list).getByRole("button", { name: "彻底删除《确认删除的剧》" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "彻底删除条目" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "彻底删除" }),
+    );
+
+    expect(mockedPurgeEntry).toHaveBeenCalledWith("purge-2");
+    expect(
+      await screen.findByRole("article", { name: "保留的剧" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("article", { name: "确认删除的剧" }),
+    ).toBeNull();
+    expect(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    ).toHaveTextContent("1");
+  });
+
+  it("清空回收站需要确认，确认后显示空态与 30 天提示", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    mockedListTrash.mockResolvedValue([
+      makeEntry({ id: "empty-1", title: "第一条" }),
+      makeEntry({ id: "empty-2", title: "第二条" }),
+    ]);
+    mockedEmptyTrash.mockResolvedValue(undefined);
+
+    render(<App />);
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    await screen.findByRole("list", { name: "回收站列表" });
+    await user.click(screen.getByRole("button", { name: "清空回收站" }));
+
+    const dialog = screen.getByRole("dialog", { name: "清空回收站" });
+    expect(dialog).toHaveTextContent("2 个条目");
+    await user.click(
+      within(dialog).getByRole("button", { name: "清空回收站" }),
+    );
+
+    expect(mockedEmptyTrash).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByRole("heading", { name: "回收站是空的" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("回收站中的条目会在 30 天后自动清除"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "回收站列表" })).toBeNull();
+    expect(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    ).toHaveTextContent("0");
+  });
+
+  it("取消清空回收站不会删除任何条目", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    mockedListTrash.mockResolvedValue([
+      makeEntry({ id: "cancel-1", title: "不会消失的条目" }),
+    ]);
+
+    render(<App />);
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    await screen.findByRole("list", { name: "回收站列表" });
+    await user.click(screen.getByRole("button", { name: "清空回收站" }));
+    const dialog = screen.getByRole("dialog", { name: "清空回收站" });
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    expect(mockedEmptyTrash).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("article", { name: "不会消失的条目" }),
+    ).toBeVisible();
+  });
+
+  it("回收站为空时显示空态、30 天提示，清空按钮禁用", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    mockedListTrash.mockResolvedValue([]);
+
+    render(<App />);
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "回收站是空的" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("回收站中的条目会在 30 天后自动清除"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清空回收站" })).toBeDisabled();
+    expect(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    ).toHaveTextContent("0");
+  });
+
+  it("回收站忽略主库状态筛选，并支持标题搜索与类型筛选", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([
+      makeEntry({ id: "lib-tracking", title: "在追的剧", status: "tracking" }),
+      makeEntry({
+        id: "lib-completed",
+        title: "看完的剧",
+        status: "completed",
+      }),
+    ]);
+    const trashedDrama = makeEntry({
+      id: "trash-drama",
+      title: "回收的剧集",
+      mediaType: "drama",
+      status: "tracking",
+    });
+    const trashedNovel = makeEntry({
+      id: "trash-novel",
+      title: "回收的小说",
+      mediaType: "novel",
+      status: "completed",
+    });
+    mockedListTrash.mockResolvedValue([trashedDrama, trashedNovel]);
+
+    render(<App />);
+
+    await screen.findByRole("article", { name: "在追的剧" });
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "completed");
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: /回收站/ }),
+    );
+    const list = await screen.findByRole("list", { name: "回收站列表" });
+    expect(
+      within(list).getByRole("article", { name: "回收的剧集" }),
+    ).toBeVisible();
+    expect(
+      within(list).getByRole("article", { name: "回收的小说" }),
+    ).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "novel");
+    expect(
+      screen.queryByRole("article", { name: "回收的剧集" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("article", { name: "回收的小说" }),
+    ).toBeVisible();
+
+    await user.type(screen.getByLabelText("搜索标题"), "小说");
+    expect(
+      screen.getByRole("article", { name: "回收的小说" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("article", { name: "回收的剧集" }),
+    ).toBeNull();
   });
 });
 

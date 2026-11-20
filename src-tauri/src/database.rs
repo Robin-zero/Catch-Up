@@ -5,14 +5,64 @@ use std::{
     time::Duration,
 };
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const DATABASE_VERSION: u32 = 1;
+const DATABASE_VERSION: u32 = 2;
+const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
-    id, title, media_type, current_progress, total_progress, status, created_at, updated_at
+    id, title, media_type, current_progress, total_progress, status,
+    season, rating, platform, cover_url, overview, created_at, updated_at
+";
+const ENTRIES_V2_DEFINITION: &str = "
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    media_type TEXT NOT NULL CHECK (
+        media_type IN ('drama', 'anime', 'variety', 'novel', 'movie', 'short_drama')
+    ),
+    current_progress INTEGER NOT NULL CHECK (
+        typeof(current_progress) = 'integer' AND current_progress >= 0
+    ),
+    total_progress INTEGER CHECK (
+        total_progress IS NULL
+        OR (typeof(total_progress) = 'integer' AND total_progress > 0)
+    ),
+    status TEXT NOT NULL CHECK (status IN ('tracking', 'completed', 'dropped')),
+    season INTEGER CHECK (
+        season IS NULL
+        OR (typeof(season) = 'integer' AND season BETWEEN 1 AND 999)
+    ),
+    rating REAL CHECK (
+        rating IS NULL
+        OR (
+            typeof(rating) IN ('real', 'integer')
+            AND rating >= 0
+            AND rating <= 10
+            AND abs(rating * 10 - round(rating * 10)) < 0.000001
+        )
+    ),
+    platform TEXT CHECK (
+        platform IS NULL
+        OR (typeof(platform) = 'text' AND length(trim(platform)) BETWEEN 1 AND 60)
+    ),
+    cover_url TEXT CHECK (
+        cover_url IS NULL
+        OR (
+            typeof(cover_url) = 'text'
+            AND length(cover_url) <= 500
+            AND (cover_url LIKE 'http://%' OR cover_url LIKE 'https://%')
+        )
+    ),
+    overview TEXT CHECK (
+        overview IS NULL
+        OR (typeof(overview) = 'text' AND length(overview) <= 2000)
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    CHECK (total_progress IS NULL OR current_progress <= total_progress)
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +73,8 @@ pub enum MediaType {
     Variety,
     Novel,
     Movie,
+    #[serde(rename = "short_drama")]
+    ShortDrama,
 }
 
 impl MediaType {
@@ -33,6 +85,15 @@ impl MediaType {
             Self::Variety => "variety",
             Self::Novel => "novel",
             Self::Movie => "movie",
+            Self::ShortDrama => "short_drama",
+        }
+    }
+
+    /// 进度单位：小说按“章”，其余内容按“集”。
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Novel => "章",
+            _ => "集",
         }
     }
 
@@ -43,6 +104,7 @@ impl MediaType {
             "variety" => Ok(Self::Variety),
             "novel" => Ok(Self::Novel),
             "movie" => Ok(Self::Movie),
+            "short_drama" => Ok(Self::ShortDrama),
             _ => Err(format!("数据库包含未知媒体类型：{value}")),
         }
     }
@@ -53,6 +115,7 @@ impl MediaType {
 pub enum EntryStatus {
     Tracking,
     Completed,
+    Dropped,
 }
 
 impl EntryStatus {
@@ -60,6 +123,7 @@ impl EntryStatus {
         match self {
             Self::Tracking => "tracking",
             Self::Completed => "completed",
+            Self::Dropped => "dropped",
         }
     }
 
@@ -67,12 +131,13 @@ impl EntryStatus {
         match value {
             "tracking" => Ok(Self::Tracking),
             "completed" => Ok(Self::Completed),
+            "dropped" => Ok(Self::Dropped),
             _ => Err(format!("数据库包含未知追更状态：{value}")),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaEntry {
     pub id: String,
@@ -81,11 +146,16 @@ pub struct MediaEntry {
     pub current_progress: i64,
     pub total_progress: Option<i64>,
     pub status: EntryStatus,
+    pub season: Option<u32>,
+    pub rating: Option<f64>,
+    pub platform: Option<String>,
+    pub cover_url: Option<String>,
+    pub overview: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryInput {
     pub title: String,
@@ -93,6 +163,11 @@ pub struct EntryInput {
     pub current_progress: i64,
     pub total_progress: Option<i64>,
     pub status: EntryStatus,
+    pub season: Option<u32>,
+    pub rating: Option<f64>,
+    pub platform: Option<String>,
+    pub cover_url: Option<String>,
+    pub overview: Option<String>,
 }
 
 struct ValidatedInput {
@@ -101,6 +176,11 @@ struct ValidatedInput {
     current_progress: i64,
     total_progress: Option<i64>,
     status: EntryStatus,
+    season: Option<u32>,
+    rating: Option<f64>,
+    platform: Option<String>,
+    cover_url: Option<String>,
+    overview: Option<String>,
 }
 
 impl EntryInput {
@@ -122,7 +202,9 @@ impl EntryInput {
             return Err("当前进度不能超过总进度".to_owned());
         }
 
-        let status = if self.total_progress == Some(self.current_progress) {
+        let status = if self.status == EntryStatus::Dropped {
+            EntryStatus::Dropped
+        } else if self.total_progress == Some(self.current_progress) {
             EntryStatus::Completed
         } else {
             self.status
@@ -134,7 +216,62 @@ impl EntryInput {
             current_progress: self.current_progress,
             total_progress: self.total_progress,
             status,
+            season: validate_season(self.season)?,
+            rating: validate_rating(self.rating)?,
+            platform: optional_trimmed(self.platform, "平台", 60)?,
+            cover_url: validate_cover_url(self.cover_url)?,
+            overview: optional_trimmed(self.overview, "简介", 2000)?,
         })
+    }
+}
+
+fn validate_season(season: Option<u32>) -> Result<Option<u32>, String> {
+    match season {
+        Some(value) if !(1..=999).contains(&value) => Err("季数必须在 1 到 999 之间".to_owned()),
+        other => Ok(other),
+    }
+}
+
+fn validate_rating(rating: Option<f64>) -> Result<Option<f64>, String> {
+    match rating {
+        None => Ok(None),
+        Some(value) => {
+            if !value.is_finite() || !(0.0..=10.0).contains(&value) {
+                return Err("评分必须在 0 到 10 之间".to_owned());
+            }
+            Ok(Some((value * 10.0).round() / 10.0))
+        }
+    }
+}
+
+fn validate_cover_url(cover_url: Option<String>) -> Result<Option<String>, String> {
+    let trimmed = optional_trimmed(cover_url, "封面地址", 500)?;
+    if let Some(url) = &trimmed {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err("封面地址仅支持 http 或 https 链接".to_owned());
+        }
+    }
+    Ok(trimmed)
+}
+
+fn optional_trimmed(
+    value: Option<String>,
+    field: &str,
+    max_chars: usize,
+) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            if trimmed.chars().count() > max_chars {
+                return Err(format!("{field}不能超过 {max_chars} 个字符"));
+            }
+            Ok(Some(trimmed.to_owned()))
+        }
     }
 }
 
@@ -166,6 +303,7 @@ impl Database {
             connection: Mutex::new(connection),
         };
         database.migrate()?;
+        database.purge_expired_trash()?;
         Ok(database)
     }
 
@@ -193,33 +331,59 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动数据库迁移：{error}"))?;
+
+        transaction
+            .execute_batch("DROP TABLE IF EXISTS entries_v2;")
+            .map_err(|error| format!("无法清理旧迁移表：{error}"))?;
+
+        let entries_exists = table_exists(&transaction, "entries")
+            .map_err(|error| format!("无法检查数据库表：{error}"))?;
+        let already_v2 = entries_exists
+            && table_columns(&transaction, "entries")
+                .map_err(|error| format!("无法读取数据库表结构：{error}"))?
+                .iter()
+                .any(|column| column == "deleted_at");
+
+        if !entries_exists {
+            transaction
+                .execute_batch(&format!("CREATE TABLE entries ({ENTRIES_V2_DEFINITION});"))
+                .map_err(|error| format!("无法初始化数据库表：{error}"))?;
+        } else if !already_v2 {
+            transaction
+                .execute_batch(&format!(
+                    "CREATE TABLE entries_v2 ({ENTRIES_V2_DEFINITION});"
+                ))
+                .map_err(|error| format!("无法创建新版数据库表：{error}"))?;
+            transaction
+                .execute_batch(
+                    "
+                    INSERT INTO entries_v2 (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    )
+                    SELECT
+                        id, title, media_type, current_progress, total_progress, status,
+                        NULL, NULL, NULL, NULL, NULL, created_at, updated_at, NULL
+                    FROM entries;
+
+                    DROP TABLE entries;
+                    ALTER TABLE entries_v2 RENAME TO entries;
+                    ",
+                )
+                .map_err(|error| format!("无法升级数据库表：{error}"))?;
+        }
+
         transaction
             .execute_batch(
                 "
-                CREATE TABLE IF NOT EXISTS entries (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
-                    media_type TEXT NOT NULL CHECK (
-                        media_type IN ('drama', 'anime', 'variety', 'novel', 'movie')
-                    ),
-                    current_progress INTEGER NOT NULL CHECK (
-                        typeof(current_progress) = 'integer' AND current_progress >= 0
-                    ),
-                    total_progress INTEGER CHECK (
-                        total_progress IS NULL
-                        OR (typeof(total_progress) = 'integer' AND total_progress > 0)
-                    ),
-                    status TEXT NOT NULL CHECK (status IN ('tracking', 'completed')),
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    CHECK (total_progress IS NULL OR current_progress <= total_progress)
-                );
-
                 CREATE INDEX IF NOT EXISTS entries_updated_at_id_idx
                     ON entries (updated_at DESC, id ASC);
+                CREATE INDEX IF NOT EXISTS entries_deleted_at_idx
+                    ON entries (deleted_at DESC);
                 ",
             )
-            .map_err(|error| format!("无法初始化数据库表：{error}"))?;
+            .map_err(|error| format!("无法创建数据库索引：{error}"))?;
         transaction
             .pragma_update(None, "user_version", DATABASE_VERSION)
             .map_err(|error| format!("无法写入数据库版本：{error}"))?;
@@ -228,18 +392,40 @@ impl Database {
             .map_err(|error| format!("无法完成数据库迁移：{error}"))
     }
 
+    fn purge_expired_trash(&self) -> Result<(), String> {
+        let cutoff = (Utc::now() - ChronoDuration::days(TRASH_RETENTION_DAYS))
+            .to_rfc3339_opts(SecondsFormat::Nanos, true);
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动回收站清理事务：{error}"))?;
+        transaction
+            .execute(
+                "DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+                params![cutoff],
+            )
+            .map_err(|error| format!("无法清理过期回收站条目：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成回收站清理：{error}"))
+    }
+
     pub fn list_entries(&self) -> Result<Vec<MediaEntry>, String> {
         let connection = self.lock()?;
-        let sql = format!("SELECT {ENTRY_COLUMNS} FROM entries ORDER BY updated_at DESC, id ASC");
-        let mut statement = connection
-            .prepare(&sql)
-            .map_err(|error| format!("无法准备追更列表查询：{error}"))?;
-        let rows = statement
-            .query_map([], entry_from_row)
-            .map_err(|error| format!("无法查询追更列表：{error}"))?;
+        let sql = format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries \
+             WHERE deleted_at IS NULL ORDER BY updated_at DESC, id ASC"
+        );
+        query_entries(&connection, &sql, "追更列表")
+    }
 
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("无法读取追更列表：{error}"))
+    pub fn list_trash(&self) -> Result<Vec<MediaEntry>, String> {
+        let connection = self.lock()?;
+        let sql = format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries \
+             WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, id ASC"
+        );
+        query_entries(&connection, &sql, "回收站列表")
     }
 
     pub fn create_entry(&self, input: EntryInput) -> Result<MediaEntry, String> {
@@ -252,17 +438,26 @@ impl Database {
             current_progress: input.current_progress,
             total_progress: input.total_progress,
             status: input.status,
+            season: input.season,
+            rating: input.rating,
+            platform: input.platform,
+            cover_url: input.cover_url,
+            overview: input.overview,
             created_at: now.clone(),
             updated_at: now,
         };
 
-        self.lock()?
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动创建条目事务：{error}"))?;
+        transaction
             .execute(
                 "
                 INSERT INTO entries (
                     id, title, media_type, current_progress, total_progress, status,
-                    created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    season, rating, platform, cover_url, overview, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 ",
                 params![
                     entry.id,
@@ -271,25 +466,37 @@ impl Database {
                     entry.current_progress,
                     entry.total_progress,
                     entry.status.as_str(),
+                    entry.season,
+                    entry.rating,
+                    entry.platform,
+                    entry.cover_url,
+                    entry.overview,
                     entry.created_at,
                     entry.updated_at,
                 ],
             )
             .map_err(|error| format!("创建追更条目失败：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成创建条目：{error}"))?;
 
         Ok(entry)
     }
 
     pub fn update_entry(&self, id: &str, input: EntryInput) -> Result<MediaEntry, String> {
         let input = input.validate()?;
-        let connection = self.lock()?;
-        let affected = connection
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动更新条目事务：{error}"))?;
+        let affected = transaction
             .execute(
                 "
                 UPDATE entries
                 SET title = ?2, media_type = ?3, current_progress = ?4,
-                    total_progress = ?5, status = ?6, updated_at = ?7
-                WHERE id = ?1
+                    total_progress = ?5, status = ?6, season = ?7, rating = ?8,
+                    platform = ?9, cover_url = ?10, overview = ?11, updated_at = ?12
+                WHERE id = ?1 AND deleted_at IS NULL
                 ",
                 params![
                     id,
@@ -298,6 +505,11 @@ impl Database {
                     input.current_progress,
                     input.total_progress,
                     input.status.as_str(),
+                    input.season,
+                    input.rating,
+                    input.platform,
+                    input.cover_url,
+                    input.overview,
                     timestamp(),
                 ],
             )
@@ -306,20 +518,95 @@ impl Database {
             return Err(format!("要更新的条目不存在（ID：{id}）"));
         }
 
-        find_entry(&connection, id)
+        let updated = find_entry(&transaction, id)
             .map_err(|error| format!("读取更新后的条目失败：{error}"))?
-            .ok_or_else(|| format!("要更新的条目不存在（ID：{id}）"))
+            .ok_or_else(|| format!("要更新的条目不存在（ID：{id}）"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成更新条目：{error}"))?;
+        Ok(updated)
     }
 
     pub fn delete_entry(&self, id: &str) -> Result<(), String> {
-        let affected = self
-            .lock()?
-            .execute("DELETE FROM entries WHERE id = ?1", params![id])
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动删除条目事务：{error}"))?;
+        let now = timestamp();
+        let affected = transaction
+            .execute(
+                "
+                UPDATE entries SET deleted_at = ?2, updated_at = ?2
+                WHERE id = ?1 AND deleted_at IS NULL
+                ",
+                params![id, now],
+            )
             .map_err(|error| format!("删除追更条目失败：{error}"))?;
         if affected == 0 {
             return Err(format!("要删除的条目不存在（ID：{id}）"));
         }
-        Ok(())
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成删除条目：{error}"))
+    }
+
+    pub fn restore_entry(&self, id: &str) -> Result<MediaEntry, String> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动恢复条目事务：{error}"))?;
+        let affected = transaction
+            .execute(
+                "
+                UPDATE entries SET deleted_at = NULL, updated_at = ?2
+                WHERE id = ?1 AND deleted_at IS NOT NULL
+                ",
+                params![id, timestamp()],
+            )
+            .map_err(|error| format!("恢复追更条目失败：{error}"))?;
+        if affected == 0 {
+            return Err(format!("要恢复的条目不存在（ID：{id}）"));
+        }
+
+        let restored = find_entry(&transaction, id)
+            .map_err(|error| format!("读取恢复后的条目失败：{error}"))?
+            .ok_or_else(|| format!("要恢复的条目不存在（ID：{id}）"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成恢复条目：{error}"))?;
+        Ok(restored)
+    }
+
+    pub fn purge_entry(&self, id: &str) -> Result<(), String> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动彻底删除事务：{error}"))?;
+        let affected = transaction
+            .execute(
+                "DELETE FROM entries WHERE id = ?1 AND deleted_at IS NOT NULL",
+                params![id],
+            )
+            .map_err(|error| format!("彻底删除追更条目失败：{error}"))?;
+        if affected == 0 {
+            return Err(format!("要彻底删除的条目不存在（ID：{id}）"));
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成彻底删除：{error}"))
+    }
+
+    pub fn empty_trash(&self) -> Result<(), String> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动清空回收站事务：{error}"))?;
+        transaction
+            .execute("DELETE FROM entries WHERE deleted_at IS NOT NULL", [])
+            .map_err(|error| format!("清空回收站失败：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成清空回收站：{error}"))
     }
 
     pub fn adjust_progress(&self, id: &str, delta: i32) -> Result<MediaEntry, String> {
@@ -349,7 +636,9 @@ impl Database {
             return Err("当前进度已达到总进度，不能继续增加".to_owned());
         }
 
-        let next_status = if delta < 0 {
+        let next_status = if current.status == EntryStatus::Dropped {
+            EntryStatus::Dropped
+        } else if delta < 0 {
             EntryStatus::Tracking
         } else if current.total_progress == Some(next_progress) {
             EntryStatus::Completed
@@ -361,7 +650,7 @@ impl Database {
                 "
                 UPDATE entries
                 SET current_progress = current_progress + ?2, status = ?3, updated_at = ?4
-                WHERE id = ?1 AND current_progress = ?5
+                WHERE id = ?1 AND current_progress = ?5 AND deleted_at IS NULL
                 ",
                 params![
                     id,
@@ -386,10 +675,16 @@ impl Database {
     }
 
     pub fn set_entry_status(&self, id: &str, status: EntryStatus) -> Result<MediaEntry, String> {
-        let connection = self.lock()?;
-        let affected = connection
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动状态更新事务：{error}"))?;
+        let affected = transaction
             .execute(
-                "UPDATE entries SET status = ?2, updated_at = ?3 WHERE id = ?1",
+                "
+                UPDATE entries SET status = ?2, updated_at = ?3
+                WHERE id = ?1 AND deleted_at IS NULL
+                ",
                 params![id, status.as_str(), timestamp()],
             )
             .map_err(|error| format!("更新追更状态失败：{error}"))?;
@@ -397,9 +692,13 @@ impl Database {
             return Err(format!("要更新状态的条目不存在（ID：{id}）"));
         }
 
-        find_entry(&connection, id)
+        let updated = find_entry(&transaction, id)
             .map_err(|error| format!("读取更新后的状态失败：{error}"))?
-            .ok_or_else(|| format!("要更新状态的条目不存在（ID：{id}）"))
+            .ok_or_else(|| format!("要更新状态的条目不存在（ID：{id}）"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成状态更新：{error}"))?;
+        Ok(updated)
     }
 }
 
@@ -407,8 +706,38 @@ fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
+fn table_exists(connection: &Connection, name: &str) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        params![name],
+        |row| row.get(0),
+    )
+}
+
+fn table_columns(connection: &Connection, name: &str) -> rusqlite::Result<Vec<String>> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({name})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect()
+}
+
+fn query_entries(
+    connection: &Connection,
+    sql: &str,
+    label: &str,
+) -> Result<Vec<MediaEntry>, String> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| format!("无法准备{label}查询：{error}"))?;
+    let rows = statement
+        .query_map([], entry_from_row)
+        .map_err(|error| format!("无法查询{label}：{error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法读取{label}：{error}"))
+}
+
 fn find_entry(connection: &Connection, id: &str) -> rusqlite::Result<Option<MediaEntry>> {
-    let sql = format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE id = ?1");
+    let sql = format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE id = ?1 AND deleted_at IS NULL");
     connection
         .query_row(&sql, params![id], entry_from_row)
         .optional()
@@ -424,8 +753,13 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<MediaEntry> {
         current_progress: row.get(3)?,
         total_progress: row.get(4)?,
         status: EntryStatus::parse(&status).map_err(|error| invalid_text_column(5, error))?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        season: row.get(6)?,
+        rating: row.get(7)?,
+        platform: row.get(8)?,
+        cover_url: row.get(9)?,
+        overview: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -461,6 +795,11 @@ mod tests {
             current_progress: 0,
             total_progress: Some(10),
             status: EntryStatus::Tracking,
+            season: None,
+            rating: None,
+            platform: None,
+            cover_url: None,
+            overview: None,
         }
     }
 
@@ -492,6 +831,11 @@ mod tests {
                     current_progress: 3,
                     total_progress: Some(12),
                     status: EntryStatus::Completed,
+                    season: None,
+                    rating: None,
+                    platform: None,
+                    cover_url: None,
+                    overview: None,
                 },
             )
             .unwrap();
@@ -585,6 +929,7 @@ mod tests {
             (MediaType::Variety, "variety"),
             (MediaType::Novel, "novel"),
             (MediaType::Movie, "movie"),
+            (MediaType::ShortDrama, "short_drama"),
         ];
 
         for (media_type, expected) in cases {
@@ -600,11 +945,17 @@ mod tests {
             assert_eq!(value["currentProgress"], json!(0));
             assert_eq!(value["totalProgress"], Value::Null);
             assert_eq!(value["status"], json!("tracking"));
+            assert_eq!(value["season"], Value::Null);
+            assert_eq!(value["rating"], Value::Null);
+            assert_eq!(value["platform"], Value::Null);
+            assert_eq!(value["coverUrl"], Value::Null);
+            assert_eq!(value["overview"], Value::Null);
             assert!(value.get("media_type").is_none());
             assert!(value.get("current_progress").is_none());
             assert!(value.get("total_progress").is_none());
             assert!(value.get("created_at").is_none());
             assert!(value.get("updated_at").is_none());
+            assert!(value.get("cover_url").is_none());
             DateTime::parse_from_rfc3339(value["createdAt"].as_str().unwrap()).unwrap();
             DateTime::parse_from_rfc3339(value["updatedAt"].as_str().unwrap()).unwrap();
             assert_eq!(entry.created_at.len(), 30, "nanosecond RFC3339 timestamp");
@@ -622,7 +973,41 @@ mod tests {
         assert_eq!(decoded.current_progress, 2);
         assert_eq!(decoded.total_progress, Some(8));
         assert_eq!(decoded.status, EntryStatus::Completed);
-        assert_eq!(database.list_entries().unwrap().len(), 5);
+        assert_eq!(decoded.season, None);
+        assert_eq!(decoded.rating, None);
+        assert_eq!(decoded.platform, None);
+        assert_eq!(decoded.cover_url, None);
+        assert_eq!(decoded.overview, None);
+        assert_eq!(database.list_entries().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn short_drama_serializes_and_uses_episode_unit() {
+        assert_eq!(MediaType::ShortDrama.unit(), "集");
+        assert_eq!(MediaType::Drama.unit(), "集");
+        assert_eq!(MediaType::Anime.unit(), "集");
+        assert_eq!(MediaType::Variety.unit(), "集");
+        assert_eq!(MediaType::Movie.unit(), "集");
+        assert_eq!(MediaType::Novel.unit(), "章");
+        assert_eq!(
+            serde_json::to_value(MediaType::ShortDrama).unwrap(),
+            Value::String("short_drama".to_owned())
+        );
+
+        let (_directory, database) = test_database();
+        let entry = database
+            .create_entry(EntryInput {
+                media_type: MediaType::ShortDrama,
+                current_progress: 3,
+                total_progress: Some(20),
+                ..input("短剧")
+            })
+            .unwrap();
+        assert_eq!(entry.media_type.unit(), "集");
+        assert_eq!(
+            serde_json::to_value(&entry).unwrap()["mediaType"],
+            json!("short_drama")
+        );
     }
 
     #[test]
@@ -965,22 +1350,29 @@ mod tests {
     fn database_checks_reject_invalid_direct_writes() {
         let (_directory, database) = test_database();
         let entry = database.create_entry(input("数据库边界")).unwrap();
+        let long_platform = "a".repeat(61);
         let invalid_statements = [
-            "UPDATE entries SET title = '  ' WHERE id = ?1",
-            "UPDATE entries SET media_type = 'book' WHERE id = ?1",
-            "UPDATE entries SET current_progress = -1 WHERE id = ?1",
-            "UPDATE entries SET current_progress = 1.5 WHERE id = ?1",
-            "UPDATE entries SET total_progress = 0 WHERE id = ?1",
-            "UPDATE entries SET total_progress = 2.5 WHERE id = ?1",
-            "UPDATE entries SET current_progress = 11 WHERE id = ?1",
-            "UPDATE entries SET status = 'paused' WHERE id = ?1",
+            "UPDATE entries SET title = '  ' WHERE id = ?1".to_owned(),
+            "UPDATE entries SET media_type = 'book' WHERE id = ?1".to_owned(),
+            "UPDATE entries SET current_progress = -1 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET current_progress = 1.5 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET total_progress = 0 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET total_progress = 2.5 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET current_progress = 11 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET status = 'paused' WHERE id = ?1".to_owned(),
+            "UPDATE entries SET season = 0 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET season = 1000 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET rating = 10.5 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET rating = 8.25 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET cover_url = 'ftp://example.com/a.png' WHERE id = ?1".to_owned(),
+            format!("UPDATE entries SET platform = '{long_platform}' WHERE id = ?1"),
         ];
 
         for statement in invalid_statements {
             let result = database
                 .lock()
                 .unwrap()
-                .execute(statement, params![&entry.id]);
+                .execute(&statement, params![&entry.id]);
             assert!(result.is_err(), "statement should fail: {statement}");
         }
 
@@ -990,5 +1382,516 @@ mod tests {
         assert_eq!(stored.current_progress, entry.current_progress);
         assert_eq!(stored.total_progress, entry.total_progress);
         assert_eq!(stored.status, entry.status);
+    }
+
+    #[test]
+    fn dropped_entries_keep_status_through_progress_changes() {
+        let (_directory, database) = test_database();
+        assert_eq!(
+            serde_json::to_value(EntryStatus::Dropped).unwrap(),
+            json!("dropped")
+        );
+        let decoded_status: EntryStatus = serde_json::from_value(json!("dropped")).unwrap();
+        assert_eq!(decoded_status, EntryStatus::Dropped);
+
+        let entry = database
+            .create_entry(EntryInput {
+                current_progress: 2,
+                total_progress: Some(5),
+                status: EntryStatus::Dropped,
+                ..input("弃剧")
+            })
+            .unwrap();
+        assert_eq!(entry.status, EntryStatus::Dropped);
+
+        let incremented = database.adjust_progress(&entry.id, 1).unwrap();
+        assert_eq!(incremented.current_progress, 3);
+        assert_eq!(incremented.status, EntryStatus::Dropped);
+
+        let decremented = database.adjust_progress(&entry.id, -1).unwrap();
+        assert_eq!(decremented.current_progress, 2);
+        assert_eq!(decremented.status, EntryStatus::Dropped);
+
+        let resumed = database
+            .set_entry_status(&entry.id, EntryStatus::Tracking)
+            .unwrap();
+        assert_eq!(resumed.status, EntryStatus::Tracking);
+        assert_eq!(resumed.current_progress, 2);
+
+        let dropped_again = database
+            .set_entry_status(&entry.id, EntryStatus::Dropped)
+            .unwrap();
+        assert_eq!(dropped_again.status, EntryStatus::Dropped);
+        assert_eq!(dropped_again.current_progress, 2);
+    }
+
+    #[test]
+    fn dropped_status_is_not_automatically_completed_at_the_limit() {
+        let (_directory, database) = test_database();
+        let at_total = database
+            .create_entry(EntryInput {
+                current_progress: 5,
+                total_progress: Some(5),
+                status: EntryStatus::Dropped,
+                ..input("弃剧满集")
+            })
+            .unwrap();
+        assert_eq!(at_total.status, EntryStatus::Dropped);
+
+        let near_total = database
+            .create_entry(EntryInput {
+                current_progress: 4,
+                total_progress: Some(5),
+                status: EntryStatus::Dropped,
+                ..input("弃剧将满")
+            })
+            .unwrap();
+        let updated = database.adjust_progress(&near_total.id, 1).unwrap();
+        assert_eq!(updated.current_progress, 5);
+        assert_eq!(updated.status, EntryStatus::Dropped);
+        assert_error(database.adjust_progress(&at_total.id, 1), "不能继续增加");
+    }
+
+    #[test]
+    fn completed_entries_return_to_tracking_when_progress_moves() {
+        let (_directory, database) = test_database();
+        let entry = database
+            .create_entry(EntryInput {
+                current_progress: 5,
+                total_progress: Some(5),
+                ..input("自动完成")
+            })
+            .unwrap();
+        assert_eq!(entry.status, EntryStatus::Completed);
+
+        let manually_completed = database
+            .create_entry(EntryInput {
+                current_progress: 1,
+                total_progress: Some(5),
+                status: EntryStatus::Completed,
+                ..input("手动完成")
+            })
+            .unwrap();
+        let incremented = database.adjust_progress(&manually_completed.id, 1).unwrap();
+        assert_eq!(incremented.current_progress, 2);
+        assert_eq!(incremented.status, EntryStatus::Tracking);
+
+        let decremented = database.adjust_progress(&entry.id, -1).unwrap();
+        assert_eq!(decremented.current_progress, 4);
+        assert_eq!(decremented.status, EntryStatus::Tracking);
+    }
+
+    #[test]
+    fn season_boundaries_are_enforced() {
+        let (_directory, database) = test_database();
+        for season in [1, 999] {
+            let entry = database
+                .create_entry(EntryInput {
+                    season: Some(season),
+                    total_progress: None,
+                    ..input("分季")
+                })
+                .unwrap();
+            assert_eq!(entry.season, Some(season));
+        }
+
+        assert_error(
+            database.create_entry(EntryInput {
+                season: Some(0),
+                ..input("零季")
+            }),
+            "季数必须在 1 到 999 之间",
+        );
+        assert_error(
+            database.create_entry(EntryInput {
+                season: Some(1000),
+                ..input("超季")
+            }),
+            "季数必须在 1 到 999 之间",
+        );
+
+        let negative_season = json!({
+            "title": "负季",
+            "mediaType": "drama",
+            "currentProgress": 0,
+            "totalProgress": null,
+            "status": "tracking",
+            "season": -1
+        });
+        assert!(serde_json::from_value::<EntryInput>(negative_season).is_err());
+    }
+
+    #[test]
+    fn rating_is_validated_and_rounded_to_one_decimal() {
+        let (_directory, database) = test_database();
+        for (raw, expected) in [
+            (0.0, 0.0),
+            (10.0, 10.0),
+            (8.26, 8.3),
+            (7.24, 7.2),
+            (9.99, 10.0),
+        ] {
+            let entry = database
+                .create_entry(EntryInput {
+                    rating: Some(raw),
+                    total_progress: None,
+                    ..input("评分")
+                })
+                .unwrap();
+            assert_eq!(entry.rating, Some(expected), "rating {raw} should round");
+        }
+
+        for invalid in [-0.01, 10.01, f64::NAN, f64::INFINITY] {
+            assert_error(
+                database.create_entry(EntryInput {
+                    rating: Some(invalid),
+                    ..input("非法评分")
+                }),
+                "评分必须在 0 到 10 之间",
+            );
+        }
+    }
+
+    #[test]
+    fn optional_fields_are_trimmed_and_validated() {
+        let (_directory, database) = test_database();
+        let entry = database
+            .create_entry(EntryInput {
+                platform: Some("  Netflix \n".to_owned()),
+                cover_url: Some("  https://img.example.com/a.jpg  ".to_owned()),
+                overview: Some("  一段简介  ".to_owned()),
+                ..input("可选字段")
+            })
+            .unwrap();
+        assert_eq!(entry.platform.as_deref(), Some("Netflix"));
+        assert_eq!(
+            entry.cover_url.as_deref(),
+            Some("https://img.example.com/a.jpg")
+        );
+        assert_eq!(entry.overview.as_deref(), Some("一段简介"));
+
+        let blank = database
+            .create_entry(EntryInput {
+                platform: Some("   ".to_owned()),
+                cover_url: Some(" \n ".to_owned()),
+                overview: Some("\t".to_owned()),
+                ..input("空白可选字段")
+            })
+            .unwrap();
+        assert_eq!(blank.platform, None);
+        assert_eq!(blank.cover_url, None);
+        assert_eq!(blank.overview, None);
+
+        assert_error(
+            database.create_entry(EntryInput {
+                cover_url: Some("ftp://example.com/a.png".to_owned()),
+                ..input("非法封面")
+            }),
+            "封面地址仅支持 http 或 https 链接",
+        );
+        assert_error(
+            database.create_entry(EntryInput {
+                cover_url: Some(format!("https://example.com/{}", "a".repeat(490))),
+                ..input("超长封面")
+            }),
+            "封面地址不能超过 500 个字符",
+        );
+        assert_error(
+            database.create_entry(EntryInput {
+                platform: Some("a".repeat(61)),
+                ..input("超长平台")
+            }),
+            "平台不能超过 60 个字符",
+        );
+        assert_error(
+            database.create_entry(EntryInput {
+                overview: Some("a".repeat(2001)),
+                ..input("超长简介")
+            }),
+            "简介不能超过 2000 个字符",
+        );
+    }
+
+    #[test]
+    fn soft_delete_moves_entry_to_trash_and_restore_brings_it_back() {
+        let (_directory, database) = test_database();
+        let entry = database.create_entry(input("回收")).unwrap();
+
+        database.delete_entry(&entry.id).unwrap();
+        assert!(database.list_entries().unwrap().is_empty());
+        let trash = database.list_trash().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].id, entry.id);
+        assert_eq!(trash[0].current_progress, entry.current_progress);
+
+        let restored = database.restore_entry(&entry.id).unwrap();
+        assert_eq!(restored.id, entry.id);
+        assert_eq!(restored.created_at, entry.created_at);
+        assert!(restored.updated_at > entry.updated_at);
+        assert_eq!(database.list_entries().unwrap(), vec![restored]);
+        assert!(database.list_trash().unwrap().is_empty());
+        assert_error(database.restore_entry(&entry.id), "要恢复的条目不存在");
+    }
+
+    #[test]
+    fn purge_entry_removes_only_trashed_entries() {
+        let (_directory, database) = test_database();
+        let active = database.create_entry(input("保留")).unwrap();
+        let trashed = database.create_entry(input("彻底删除")).unwrap();
+        database.delete_entry(&trashed.id).unwrap();
+
+        assert_error(database.purge_entry(&active.id), "要彻底删除的条目不存在");
+        database.purge_entry(&trashed.id).unwrap();
+        assert!(database.list_trash().unwrap().is_empty());
+        assert_eq!(database.list_entries().unwrap(), vec![active]);
+        assert_error(database.purge_entry(&trashed.id), "要彻底删除的条目不存在");
+    }
+
+    #[test]
+    fn empty_trash_removes_all_trashed_entries_and_keeps_active_ones() {
+        let (_directory, database) = test_database();
+        let active = database.create_entry(input("仍在追")).unwrap();
+        let first = database.create_entry(input("第一条")).unwrap();
+        let second = database.create_entry(input("第二条")).unwrap();
+        database.delete_entry(&first.id).unwrap();
+        database.delete_entry(&second.id).unwrap();
+
+        database.empty_trash().unwrap();
+        assert!(database.list_trash().unwrap().is_empty());
+        assert_eq!(database.list_entries().unwrap(), vec![active]);
+        database.empty_trash().unwrap();
+    }
+
+    #[test]
+    fn trash_orders_by_deleted_at_descending() {
+        let (_directory, database) = test_database();
+        let first = database.create_entry(input("第一")).unwrap();
+        let second = database.create_entry(input("第二")).unwrap();
+        let third = database.create_entry(input("第三")).unwrap();
+        for entry in [&first, &second, &third] {
+            database.delete_entry(&entry.id).unwrap();
+        }
+
+        {
+            let connection = database.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE entries SET deleted_at = ?2 WHERE id = ?1",
+                    params![&first.id, "2001-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE entries SET deleted_at = ?2 WHERE id = ?1",
+                    params![&second.id, "2003-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE entries SET deleted_at = ?2 WHERE id = ?1",
+                    params![&third.id, "2002-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+        }
+
+        let ordered_ids = database
+            .list_trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_ids,
+            vec![second.id.clone(), third.id.clone(), first.id.clone()]
+        );
+    }
+
+    #[test]
+    fn expired_trash_is_purged_when_the_database_opens() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        let (old, recent) = {
+            let database = Database::open(&path).unwrap();
+            let old = database.create_entry(input("过期回收")).unwrap();
+            let recent = database.create_entry(input("近期回收")).unwrap();
+            database.delete_entry(&old.id).unwrap();
+            database.delete_entry(&recent.id).unwrap();
+            {
+                let connection = database.lock().unwrap();
+                connection
+                    .execute(
+                        "UPDATE entries SET deleted_at = ?2 WHERE id = ?1",
+                        params![&old.id, "2000-01-01T00:00:00.000000000Z"],
+                    )
+                    .unwrap();
+            }
+            (old, recent)
+        };
+
+        let reopened = Database::open(&path).unwrap();
+        let trash = reopened.list_trash().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].id, recent.id);
+        assert!(reopened.list_entries().unwrap().is_empty());
+        assert_error(reopened.restore_entry(&old.id), "要恢复的条目不存在");
+    }
+
+    #[test]
+    fn v1_database_upgrades_to_v2_without_losing_data() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE entries (
+                        id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        media_type TEXT NOT NULL,
+                        current_progress INTEGER NOT NULL,
+                        total_progress INTEGER,
+                        status TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX entries_updated_at_id_idx
+                        ON entries (updated_at DESC, id ASC);
+                    PRAGMA user_version = 1;
+                    ",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    ",
+                    params![
+                        "v1-a",
+                        "旧版条目 A",
+                        "novel",
+                        12,
+                        Some(30),
+                        "tracking",
+                        "2020-01-01T00:00:00.000000000Z",
+                        "2020-01-02T00:00:00.000000000Z",
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    ",
+                    params![
+                        "v1-b",
+                        "旧版条目 B",
+                        "movie",
+                        1,
+                        Some(1),
+                        "completed",
+                        "2021-01-01T00:00:00.000000000Z",
+                        "2021-01-02T00:00:00.000000000Z",
+                    ],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let version: u32 = database
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+
+        let entries = database.list_entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "v1-b");
+        assert_eq!(entries[1].id, "v1-a");
+
+        let preserved = entries.iter().find(|entry| entry.id == "v1-a").unwrap();
+        assert_eq!(preserved.title, "旧版条目 A");
+        assert_eq!(preserved.media_type, MediaType::Novel);
+        assert_eq!(preserved.current_progress, 12);
+        assert_eq!(preserved.total_progress, Some(30));
+        assert_eq!(preserved.status, EntryStatus::Tracking);
+        assert_eq!(preserved.created_at, "2020-01-01T00:00:00.000000000Z");
+        assert_eq!(preserved.updated_at, "2020-01-02T00:00:00.000000000Z");
+        assert_eq!(preserved.season, None);
+        assert_eq!(preserved.rating, None);
+        assert_eq!(preserved.platform, None);
+        assert_eq!(preserved.cover_url, None);
+        assert_eq!(preserved.overview, None);
+
+        let completed = entries.iter().find(|entry| entry.id == "v1-b").unwrap();
+        assert_eq!(completed.status, EntryStatus::Completed);
+        assert_eq!(completed.media_type, MediaType::Movie);
+
+        let has_trash_index: bool = database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'entries_deleted_at_idx')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_trash_index);
+    }
+
+    #[test]
+    fn update_refreshes_updated_at_without_touching_created_at() {
+        let (_directory, database) = test_database();
+        let entry = database.create_entry(input("旧时间")).unwrap();
+        {
+            let connection = database.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE entries SET updated_at = '2000-01-01T00:00:00.000000000Z' WHERE id = ?1",
+                    params![&entry.id],
+                )
+                .unwrap();
+        }
+
+        let updated = database
+            .update_entry(
+                &entry.id,
+                EntryInput {
+                    status: EntryStatus::Completed,
+                    ..input("新标题")
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.title, "新标题");
+        assert_eq!(updated.created_at, entry.created_at);
+        assert!(updated.updated_at.as_str() > "2000-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn trashed_entries_reject_mutations() {
+        let (_directory, database) = test_database();
+        let entry = database.create_entry(input("回收后修改")).unwrap();
+        database.delete_entry(&entry.id).unwrap();
+
+        assert_error(
+            database.update_entry(&entry.id, input("试图修改")),
+            "要更新的条目不存在",
+        );
+        assert_error(
+            database.adjust_progress(&entry.id, 1),
+            "要调整进度的条目不存在",
+        );
+        assert_error(
+            database.set_entry_status(&entry.id, EntryStatus::Completed),
+            "要更新状态的条目不存在",
+        );
+        assert_eq!(database.list_trash().unwrap().len(), 1);
     }
 }

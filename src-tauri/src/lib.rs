@@ -1,4 +1,4 @@
-mod database;
+pub mod database;
 
 use database::{Database, EntryInput, EntryStatus, MediaEntry};
 use tauri::{Manager, State};
@@ -43,6 +43,26 @@ fn set_entry_status(
     status: EntryStatus,
 ) -> Result<MediaEntry, String> {
     database.set_entry_status(&id, status)
+}
+
+#[tauri::command]
+fn list_trash(database: State<'_, Database>) -> Result<Vec<MediaEntry>, String> {
+    database.list_trash()
+}
+
+#[tauri::command]
+fn restore_entry(database: State<'_, Database>, id: String) -> Result<MediaEntry, String> {
+    database.restore_entry(&id)
+}
+
+#[tauri::command]
+fn purge_entry(database: State<'_, Database>, id: String) -> Result<(), String> {
+    database.purge_entry(&id)
+}
+
+#[tauri::command]
+fn empty_trash(database: State<'_, Database>) -> Result<(), String> {
+    database.empty_trash()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -116,6 +136,10 @@ pub fn run() {
             delete_entry,
             adjust_progress,
             set_entry_status,
+            list_trash,
+            restore_entry,
+            purge_entry,
+            empty_trash,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CatchUp");

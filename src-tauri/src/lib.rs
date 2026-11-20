@@ -1,11 +1,13 @@
 pub mod database;
 pub mod settings;
 pub mod tmdb;
+pub mod webdav;
 
 use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
 use settings::AppSettings;
 use tauri::{Manager, State};
 use tmdb::ScrapeCandidate;
+use webdav::SyncReport;
 
 #[tauri::command]
 fn list_entries(database: State<'_, Database>) -> Result<Vec<MediaEntry>, String> {
@@ -102,6 +104,11 @@ async fn search_tmdb(
     tmdb::search_tmdb(&settings, &query, media_type).await
 }
 
+#[tauri::command]
+async fn sync_now(database: State<'_, Database>) -> Result<SyncReport, String> {
+    webdav::sync_now(database.inner()).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -181,6 +188,7 @@ pub fn run() {
             get_settings,
             save_settings,
             search_tmdb,
+            sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CatchUp");

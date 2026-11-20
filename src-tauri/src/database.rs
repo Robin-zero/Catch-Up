@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::settings::AppSettings;
 
-const DATABASE_VERSION: u32 = 3;
+const DATABASE_VERSION: u32 = 4;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -180,6 +180,35 @@ pub struct ImportReport {
     pub skipped: u32,
     pub errors: Vec<String>,
     pub entries: Vec<MediaEntry>,
+}
+
+/// 同步用的条目结构：比前端 `MediaEntry` 多一个回收站墓碑字段。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncEntry {
+    pub id: String,
+    pub title: String,
+    pub media_type: MediaType,
+    pub current_progress: i64,
+    pub total_progress: Option<i64>,
+    pub status: EntryStatus,
+    pub season: Option<u32>,
+    pub rating: Option<f64>,
+    pub platform: Option<String>,
+    pub cover_url: Option<String>,
+    pub overview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
+}
+
+/// 彻底删除的墓碑记录，用于阻止远端旧数据复活。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgedEntry {
+    pub id: String,
+    pub purged_at: String,
 }
 
 struct ValidatedInput {
@@ -804,6 +833,10 @@ impl Database {
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS purged_entries (
+                    id TEXT PRIMARY KEY,
+                    purged_at TEXT NOT NULL
+                );
                 ",
             )
             .map_err(|error| format!("无法创建数据库索引或设置表：{error}"))?;
@@ -816,12 +849,27 @@ impl Database {
     }
 
     fn purge_expired_trash(&self) -> Result<(), String> {
+        let now = timestamp();
         let cutoff = (Utc::now() - ChronoDuration::days(TRASH_RETENTION_DAYS))
             .to_rfc3339_opts(SecondsFormat::Nanos, true);
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动回收站清理事务：{error}"))?;
+        transaction
+            .execute(
+                "
+                INSERT INTO purged_entries (id, purged_at)
+                SELECT id, CASE WHEN ?1 > updated_at THEN ?1 ELSE updated_at END
+                FROM entries
+                WHERE deleted_at IS NOT NULL AND deleted_at < ?2
+                ON CONFLICT(id) DO UPDATE SET purged_at = CASE
+                    WHEN excluded.purged_at > purged_entries.purged_at
+                    THEN excluded.purged_at ELSE purged_entries.purged_at END
+                ",
+                params![now, cutoff],
+            )
+            .map_err(|error| format!("无法记录过期条目清理记录：{error}"))?;
         transaction
             .execute(
                 "DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
@@ -1076,25 +1124,54 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动彻底删除事务：{error}"))?;
-        let affected = transaction
-            .execute(
-                "DELETE FROM entries WHERE id = ?1 AND deleted_at IS NOT NULL",
+        let updated_at = transaction
+            .query_row(
+                "SELECT updated_at FROM entries WHERE id = ?1 AND deleted_at IS NOT NULL",
                 params![id],
+                |row| row.get::<_, String>(0),
             )
+            .optional()
+            .map_err(|error| format!("读取待彻底删除条目失败：{error}"))?
+            .ok_or_else(|| format!("要彻底删除的条目不存在（ID：{id}）"))?;
+        let purged_at = later_timestamp(timestamp(), updated_at);
+        transaction
+            .execute("DELETE FROM entries WHERE id = ?1", params![id])
             .map_err(|error| format!("彻底删除追更条目失败：{error}"))?;
-        if affected == 0 {
-            return Err(format!("要彻底删除的条目不存在（ID：{id}）"));
-        }
+        transaction
+            .execute(
+                "
+                INSERT INTO purged_entries (id, purged_at) VALUES (?1, ?2)
+                ON CONFLICT(id) DO UPDATE SET purged_at = CASE
+                    WHEN excluded.purged_at > purged_entries.purged_at
+                    THEN excluded.purged_at ELSE purged_entries.purged_at END
+                ",
+                params![id, purged_at],
+            )
+            .map_err(|error| format!("记录彻底删除信息失败：{error}"))?;
         transaction
             .commit()
             .map_err(|error| format!("无法完成彻底删除：{error}"))
     }
 
     pub fn empty_trash(&self) -> Result<(), String> {
+        let now = timestamp();
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动清空回收站事务：{error}"))?;
+        transaction
+            .execute(
+                "
+                INSERT INTO purged_entries (id, purged_at)
+                SELECT id, CASE WHEN ?1 > updated_at THEN ?1 ELSE updated_at END
+                FROM entries WHERE deleted_at IS NOT NULL
+                ON CONFLICT(id) DO UPDATE SET purged_at = CASE
+                    WHEN excluded.purged_at > purged_entries.purged_at
+                    THEN excluded.purged_at ELSE purged_entries.purged_at END
+                ",
+                params![now],
+            )
+            .map_err(|error| format!("记录清空回收站信息失败：{error}"))?;
         transaction
             .execute("DELETE FROM entries WHERE deleted_at IS NOT NULL", [])
             .map_err(|error| format!("清空回收站失败：{error}"))?;
@@ -1195,6 +1272,96 @@ impl Database {
         Ok(updated)
     }
 
+    pub(crate) fn read_sync_state(&self) -> Result<(Vec<SyncEntry>, Vec<PurgedEntry>), String> {
+        let connection = self.lock()?;
+        let sql = format!(
+            "SELECT {ENTRY_COLUMNS}, deleted_at FROM entries ORDER BY updated_at DESC, id ASC"
+        );
+        let mut statement = connection
+            .prepare(&sql)
+            .map_err(|error| format!("无法准备同步数据查询：{error}"))?;
+        let entries = statement
+            .query_map([], sync_entry_from_row)
+            .map_err(|error| format!("无法查询同步数据：{error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("无法读取同步数据：{error}"))?;
+
+        let mut purged_statement = connection
+            .prepare("SELECT id, purged_at FROM purged_entries ORDER BY id ASC")
+            .map_err(|error| format!("无法准备彻底删除记录查询：{error}"))?;
+        let purged = purged_statement
+            .query_map([], |row| {
+                Ok(PurgedEntry {
+                    id: row.get(0)?,
+                    purged_at: row.get(1)?,
+                })
+            })
+            .map_err(|error| format!("无法查询彻底删除记录：{error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("无法读取彻底删除记录：{error}"))?;
+
+        Ok((entries, purged))
+    }
+
+    /// 在单个事务中写入合并结果：先删除墓碑对应的条目，再 upsert 合并条目，
+    /// 最后保留最新的墓碑时间。
+    pub(crate) fn apply_sync_merge(
+        &self,
+        entries: &[SyncEntry],
+        purged: &[PurgedEntry],
+    ) -> Result<(), String> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动同步写入事务：{error}"))?;
+
+        for record in purged {
+            transaction
+                .execute("DELETE FROM entries WHERE id = ?1", params![record.id])
+                .map_err(|error| format!("同步删除条目失败：{error}"))?;
+        }
+        for entry in entries {
+            upsert_sync_entry(&transaction, entry)
+                .map_err(|error| format!("同步写入条目失败：{error}"))?;
+        }
+        for record in purged {
+            transaction
+                .execute(
+                    "
+                    INSERT INTO purged_entries (id, purged_at) VALUES (?1, ?2)
+                    ON CONFLICT(id) DO UPDATE SET purged_at = CASE
+                        WHEN excluded.purged_at > purged_entries.purged_at
+                        THEN excluded.purged_at ELSE purged_entries.purged_at END
+                    ",
+                    params![record.id, record.purged_at],
+                )
+                .map_err(|error| format!("同步写入彻底删除记录失败：{error}"))?;
+        }
+
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成同步写入：{error}"))
+    }
+
+    pub(crate) fn set_last_synced_at(&self, value: &str) -> Result<(), String> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动同步时间写入事务：{error}"))?;
+        transaction
+            .execute(
+                "
+                INSERT INTO settings (key, value) VALUES ('last_synced_at', ?1)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                ",
+                params![value],
+            )
+            .map_err(|error| format!("保存同步时间失败：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成同步时间保存：{error}"))
+    }
+
     pub fn get_settings(&self) -> Result<AppSettings, String> {
         let connection = self.lock()?;
         let mut statement = connection
@@ -1270,6 +1437,14 @@ impl Database {
 
 fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+fn later_timestamp(first: String, second: String) -> String {
+    if first >= second {
+        first
+    } else {
+        second
+    }
 }
 
 fn insert_entry(connection: &Connection, entry: &MediaEntry) -> rusqlite::Result<()> {
@@ -1372,6 +1547,69 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<MediaEntry> {
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
     })
+}
+
+fn sync_entry_from_row(row: &Row<'_>) -> rusqlite::Result<SyncEntry> {
+    let media_type = row.get::<_, String>(2)?;
+    let status = row.get::<_, String>(5)?;
+    Ok(SyncEntry {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        media_type: MediaType::parse(&media_type).map_err(|error| invalid_text_column(2, error))?,
+        current_progress: row.get(3)?,
+        total_progress: row.get(4)?,
+        status: EntryStatus::parse(&status).map_err(|error| invalid_text_column(5, error))?,
+        season: row.get(6)?,
+        rating: row.get(7)?,
+        platform: row.get(8)?,
+        cover_url: row.get(9)?,
+        overview: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        deleted_at: row.get(13)?,
+    })
+}
+
+fn upsert_sync_entry(connection: &Connection, entry: &SyncEntry) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        INSERT INTO entries (
+            id, title, media_type, current_progress, total_progress, status,
+            season, rating, platform, cover_url, overview, created_at, updated_at, deleted_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            media_type = excluded.media_type,
+            current_progress = excluded.current_progress,
+            total_progress = excluded.total_progress,
+            status = excluded.status,
+            season = excluded.season,
+            rating = excluded.rating,
+            platform = excluded.platform,
+            cover_url = excluded.cover_url,
+            overview = excluded.overview,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            deleted_at = excluded.deleted_at
+        ",
+        params![
+            &entry.id,
+            &entry.title,
+            entry.media_type.as_str(),
+            entry.current_progress,
+            entry.total_progress,
+            entry.status.as_str(),
+            entry.season,
+            entry.rating,
+            &entry.platform,
+            &entry.cover_url,
+            &entry.overview,
+            &entry.created_at,
+            &entry.updated_at,
+            &entry.deleted_at,
+        ],
+    )?;
+    Ok(())
 }
 
 fn invalid_text_column(column: usize, error: String) -> rusqlite::Error {
@@ -1859,6 +2097,69 @@ mod tests {
 
         let reopened = Database::open(&path).unwrap();
         assert_eq!(reopened.list_entries().unwrap(), vec![entry]);
+    }
+
+    #[test]
+    fn purge_tombstones_survive_reopen_and_migration_is_idempotent() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        let purged_id = {
+            let database = Database::open(&path).unwrap();
+            let entry = database.create_entry(input("彻底删除并记录")).unwrap();
+            database.delete_entry(&entry.id).unwrap();
+            database.purge_entry(&entry.id).unwrap();
+            database.migrate().unwrap();
+            database.migrate().unwrap();
+
+            let version: u32 = database
+                .lock()
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, DATABASE_VERSION);
+            let has_table: bool = database
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'purged_entries')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(has_table);
+            let (_, purged) = database.read_sync_state().unwrap();
+            assert_eq!(purged.len(), 1);
+            assert_eq!(purged[0].id, entry.id);
+            entry.id
+        };
+
+        let reopened = Database::open(&path).unwrap();
+        let (entries, purged) = reopened.read_sync_state().unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(purged.len(), 1);
+        assert_eq!(purged[0].id, purged_id);
+        assert!(!purged[0].purged_at.is_empty());
+    }
+
+    #[test]
+    fn empty_trash_records_a_tombstone_for_each_removed_entry() {
+        let (_directory, database) = test_database();
+        let first = database.create_entry(input("清空一")).unwrap();
+        let second = database.create_entry(input("清空二")).unwrap();
+        database.delete_entry(&first.id).unwrap();
+        database.delete_entry(&second.id).unwrap();
+
+        database.empty_trash().unwrap();
+
+        let (_, purged) = database.read_sync_state().unwrap();
+        let mut ids = purged
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let mut expected = vec![first.id.as_str(), second.id.as_str()];
+        expected.sort_unstable();
+        assert_eq!(ids, expected);
     }
 
     #[test]
@@ -2877,7 +3178,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_database_upgrades_to_v3_and_keeps_settings_extensible() {
+    fn v2_database_upgrades_to_latest_and_keeps_settings_extensible() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("catchup.sqlite3");
         {
@@ -2922,7 +3223,15 @@ mod tests {
             let version: u32 = connection
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .unwrap();
-            assert_eq!(version, 3);
+            assert_eq!(version, DATABASE_VERSION);
+            let has_purged_table: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'purged_entries')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(has_purged_table);
             connection
                 .execute(
                     "INSERT INTO settings (key, value) VALUES ('future_feature', 'on')",

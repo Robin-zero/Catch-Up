@@ -22,6 +22,7 @@ import {
   saveSettings,
   searchTmdb,
   setEntryStatus,
+  syncNow,
   updateEntry,
 } from "./api";
 import App from "./App";
@@ -32,6 +33,7 @@ import {
   type MediaEntry,
   type MediaType,
   type ScrapeCandidate,
+  type SyncReport,
 } from "./types";
 
 vi.mock("./api", () => ({
@@ -49,6 +51,7 @@ vi.mock("./api", () => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
   searchTmdb: vi.fn(),
+  syncNow: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
   ),
@@ -68,6 +71,17 @@ const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 const mockedGetSettings = vi.mocked(getSettings);
 const mockedSaveSettings = vi.mocked(saveSettings);
 const mockedSearchTmdb = vi.mocked(searchTmdb);
+const mockedSyncNow = vi.mocked(syncNow);
+
+function makeSyncReport(overrides: Partial<SyncReport> = {}): SyncReport {
+  return {
+    merged: 0,
+    uploaded: 0,
+    downloaded: 0,
+    lastSyncedAt: "2026-11-20T04:05:06.000000000Z",
+    ...overrides,
+  };
+}
 
 function makeEntry(overrides: Partial<MediaEntry> = {}): MediaEntry {
   return {
@@ -108,6 +122,8 @@ beforeEach(() => {
   mockedGetSettings.mockResolvedValue({ ...DEFAULT_SETTINGS });
   mockedSaveSettings.mockReset();
   mockedSearchTmdb.mockReset();
+  mockedSyncNow.mockReset();
+  mockedSyncNow.mockResolvedValue(makeSyncReport());
 });
 
 describe("内容库", () => {
@@ -2072,6 +2088,201 @@ describe("设置中心", () => {
     expect(within(dialog).getByText("启用自动同步时请填写用户名。")).toBeInTheDocument();
     expect(mockedSaveSettings).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+  });
+});
+
+describe("WebDAV 自动同步", () => {
+  const enabledSettings: Partial<AppSettings> = {
+    webdavUrl: "https://dav.example.com/catchup",
+    webdavUsername: "alice",
+    webdavPassword: "secret",
+    webdavEnabled: true,
+  };
+
+  function sidebarSyncButton() {
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    return within(sidebar).getByRole("button", { name: /同步状态/ });
+  }
+
+  async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(within(sidebar).getByRole("button", { name: "设置" }));
+    return screen.getByRole("dialog", { name: "设置" });
+  }
+
+  function renderWith(settings: Partial<AppSettings> = {}) {
+    mockedGetSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      ...settings,
+    });
+    render(<App />);
+  }
+
+  it("启动时自动同步一次，成功后刷新列表并显示已同步", async () => {
+    const remoteEntry = makeEntry({ id: "remote", title: "来自远端" });
+    mockedListEntries.mockResolvedValueOnce([]).mockResolvedValue([remoteEntry]);
+    mockedSyncNow.mockResolvedValue(
+      makeSyncReport({ merged: 1, downloaded: 1 }),
+    );
+
+    renderWith(enabledSettings);
+
+    expect(
+      await screen.findByRole("article", { name: "来自远端" }),
+    ).toBeInTheDocument();
+    expect(mockedSyncNow).toHaveBeenCalledTimes(1);
+    expect(mockedListEntries).toHaveBeenCalledTimes(2);
+    expect(sidebarSyncButton()).toHaveTextContent("已同步");
+  });
+
+  it("同步失败时保留本地条目并在设置中显示错误", async () => {
+    const localEntry = makeEntry({ id: "local", title: "本地仍可用" });
+    mockedListEntries.mockResolvedValue([localEntry]);
+    mockedSyncNow.mockRejectedValue(new Error("WebDAV 服务器返回 500"));
+
+    renderWith(enabledSettings);
+
+    expect(
+      await screen.findByRole("article", { name: "本地仍可用" }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(sidebarSyncButton()).toHaveTextContent("同步失败"),
+    );
+
+    const user = userEvent.setup();
+    const dialog = await openSettings(user);
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "WebDAV 服务器返回 500",
+    );
+    expect(
+      screen.getByRole("article", { name: "本地仍可用" }),
+    ).toBeInTheDocument();
+  });
+
+  it("设置中显示上次同步时间，并在同步中禁用立即同步", async () => {
+    mockedListEntries.mockResolvedValue([]);
+    mockedSyncNow.mockReturnValue(new Promise(() => {}));
+    renderWith({
+      ...enabledSettings,
+      lastSyncedAt: "2026-11-01T08:00:00.000Z",
+    });
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+
+    const user = userEvent.setup();
+    const dialog = await openSettings(user);
+
+    expect(within(dialog).getByLabelText("上次同步")).not.toHaveValue(
+      "尚未同步",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "同步中…" }),
+    ).toBeDisabled();
+  });
+
+  it("保存启用设置后点击立即同步，展示合并结果并更新上次同步", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    mockedSaveSettings.mockImplementation(async (settings) => settings);
+    mockedSyncNow.mockResolvedValue(
+      makeSyncReport({ merged: 2, uploaded: 1, downloaded: 1 }),
+    );
+
+    renderWith();
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    let dialog = await openSettings(user);
+    await user.type(
+      within(dialog).getByLabelText("服务器地址"),
+      "https://dav.example.com/catchup",
+    );
+    await user.type(within(dialog).getByLabelText("用户名"), "alice");
+    await user.click(
+      within(dialog).getByRole("checkbox", {
+        name: "启用 WebDAV 自动同步",
+      }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "设置" })).toBeNull(),
+    );
+    expect(mockedSyncNow).not.toHaveBeenCalled();
+
+    dialog = await openSettings(user);
+    await user.click(
+      within(dialog).getByRole("button", { name: "立即同步" }),
+    );
+
+    await waitFor(() => expect(mockedSyncNow).toHaveBeenCalledTimes(1));
+    expect(
+      await within(dialog).findByText(/同步完成：合并 2 项/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("上次同步")).not.toHaveValue(
+      "尚未同步",
+    );
+  });
+
+  it("未启用自动同步时，写操作不会触发同步", async () => {
+    const entry = makeEntry({
+      id: "local",
+      title: "仅本地条目",
+      currentProgress: 1,
+      totalProgress: 2,
+    });
+    mockedListEntries.mockResolvedValue([entry]);
+    mockedAdjustProgress.mockResolvedValue(
+      makeEntry({
+        ...entry,
+        currentProgress: 2,
+        status: "completed",
+      }),
+    );
+
+    renderWith();
+    const card = await screen.findByRole("article", { name: "仅本地条目" });
+    const user = userEvent.setup();
+    await user.click(
+      within(card).getByRole("button", {
+        name: "《仅本地条目》进度加一",
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+    expect(mockedSyncNow).not.toHaveBeenCalled();
+    expect(sidebarSyncButton()).toHaveTextContent("仅本地");
+  });
+
+  it("写操作成功后防抖两秒只触发一次同步", async () => {
+    const entry = makeEntry({
+      id: "local",
+      title: "防抖条目",
+      currentProgress: 1,
+      totalProgress: 2,
+    });
+    const updated = makeEntry({
+      ...entry,
+      currentProgress: 2,
+      status: "completed",
+    });
+    mockedListEntries.mockResolvedValue([entry]);
+    mockedAdjustProgress.mockResolvedValue(updated);
+
+    renderWith(enabledSettings);
+    await screen.findByRole("article", { name: "防抖条目" });
+    await waitFor(() => expect(mockedSyncNow).toHaveBeenCalledTimes(1));
+
+    const user = userEvent.setup();
+    await user.click(
+      within(
+        screen.getByRole("article", { name: "防抖条目" }),
+      ).getByRole("button", { name: "《防抖条目》进度加一" }),
+    );
+    expect(mockedAdjustProgress).toHaveBeenCalledTimes(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(mockedSyncNow).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => expect(mockedSyncNow).toHaveBeenCalledTimes(2), {
+      timeout: 2500,
+    });
   });
 });
 

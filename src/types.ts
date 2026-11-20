@@ -31,6 +31,13 @@ export interface ImportReport {
   entries: MediaEntry[];
 }
 
+export interface SyncReport {
+  merged: number;
+  uploaded: number;
+  downloaded: number;
+  lastSyncedAt: string;
+}
+
 export interface AppSettings {
   tmdbApiKey: string;
   webdavUrl: string;

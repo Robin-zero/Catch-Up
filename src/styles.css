@@ -328,7 +328,8 @@ svg {
 .sidebar__db-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   padding: 0 7px 2px;
   font-size: 10.5px;
   color: var(--text-tertiary);
@@ -339,6 +340,69 @@ svg {
   height: 6px;
   border-radius: 50%;
   background: #4c9a73;
+}
+
+.sidebar__sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar__sync span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__sync:hover {
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+.sidebar__sync-dot,
+.sync-chip__dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #9aa096;
+}
+
+.sidebar__sync--syncing .sidebar__sync-dot,
+.sync-chip--syncing .sync-chip__dot {
+  background: var(--accent);
+  animation: sync-pulse 1s ease-in-out infinite;
+}
+
+.sidebar__sync--synced .sidebar__sync-dot,
+.sync-chip--synced .sync-chip__dot {
+  background: #4c9a73;
+}
+
+.sidebar__sync--error,
+.sync-chip--error {
+  color: var(--danger);
+}
+
+.sidebar__sync--error .sidebar__sync-dot,
+.sync-chip--error .sync-chip__dot {
+  background: var(--danger);
+}
+
+@keyframes sync-pulse {
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* ---------- Top bar ---------- */
@@ -479,6 +543,30 @@ svg {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.sync-chip {
+  display: none;
+}
+
+.topbar__sync-chip {
+  align-items: center;
+  gap: 5px;
+  max-width: 64px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sync-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar__trash-button,
@@ -1625,6 +1713,30 @@ kbd {
   accent-color: var(--accent);
 }
 
+.settings-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.settings-sync .field-hint {
+  flex: 1 1 150px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings-sync-result {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--accent);
+}
+
+.settings-sync-result--error {
+  color: var(--danger);
+}
+
 .form-field input[readonly] {
   background: var(--surface-muted);
   color: var(--text-tertiary);
@@ -1885,6 +1997,11 @@ kbd {
     height: 34px;
     border-radius: 8px;
     background: var(--surface-muted);
+  }
+
+  .topbar__sync-chip {
+    display: inline-flex;
+    flex: none;
   }
 
   .topbar__trash-button svg,

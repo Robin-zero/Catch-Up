@@ -7,6 +7,7 @@ import type {
   MediaEntry,
   MediaType,
   ScrapeCandidate,
+  SyncReport,
 } from "./types";
 
 export function listEntries(): Promise<MediaEntry[]> {
@@ -78,6 +79,10 @@ export function searchTmdb(
     query,
     mediaType: mediaType ?? null,
   });
+}
+
+export function syncNow(): Promise<SyncReport> {
+  return invoke<SyncReport>("sync_now");
 }
 
 export function getLibraryErrorMessage(error: unknown): string {

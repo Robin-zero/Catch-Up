@@ -24,6 +24,7 @@ import {
   saveSettings,
   searchTmdb,
   setEntryStatus,
+  syncNow,
   updateEntry,
 } from "./api";
 import {
@@ -38,6 +39,7 @@ import {
   type MediaEntry,
   type MediaType,
   type ScrapeCandidate,
+  type SyncReport,
 } from "./types";
 
 type LibraryState =
@@ -46,6 +48,58 @@ type LibraryState =
   | { status: "success"; entries: MediaEntry[] };
 
 type AppView = "library" | "trash";
+
+type SyncPhase = "local" | "syncing" | "synced" | "error";
+
+interface SyncState {
+  phase: SyncPhase;
+  lastSyncedAt: string | null;
+  message?: string;
+  report?: SyncReport;
+}
+
+const SYNC_DEBOUNCE_MS = 2000;
+
+const syncClockFormatter = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function formatSyncClock(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : syncClockFormatter.format(parsed);
+}
+
+function getSyncLabel(settings: AppSettings, syncState: SyncState): string {
+  if (!settings.webdavEnabled) {
+    return "仅本地";
+  }
+  if (syncState.phase === "syncing") {
+    return "同步中…";
+  }
+  if (syncState.phase === "synced") {
+    const clock = formatSyncClock(syncState.lastSyncedAt);
+    return clock ? `已同步 ${clock}` : "已同步";
+  }
+  if (syncState.phase === "error") {
+    return "同步失败";
+  }
+  return "等待同步";
+}
+
+function getSyncErrorMessage(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
+  return message.trim() || "WebDAV 同步失败，请检查设置后重试。";
+}
 
 const updatedAtFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
@@ -1351,14 +1405,18 @@ function ImportMarkdownDialog({
 
 function SettingsDialog({
   settings,
+  syncState,
   fallbackFocusRef,
   onClose,
   onSaved,
+  onSyncNow,
 }: {
   settings: AppSettings;
+  syncState: SyncState;
   fallbackFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: (settings: AppSettings) => void;
+  onSyncNow: () => void;
 }) {
   const [values, setValues] = useState<AppSettings>(() => ({ ...settings }));
   const [errors, setErrors] = useState<
@@ -1373,9 +1431,18 @@ function SettingsDialog({
   const webdavUrlRef = useRef<HTMLInputElement>(null);
   const webdavUsernameRef = useRef<HTMLInputElement>(null);
   const titleId = "settings-title";
-  const lastSyncedLabel = values.lastSyncedAt
-    ? updatedAtFormatter.format(new Date(values.lastSyncedAt))
+  const syncing = syncState.phase === "syncing";
+  const lastSyncedLabel = settings.lastSyncedAt
+    ? updatedAtFormatter.format(new Date(settings.lastSyncedAt))
     : "尚未同步";
+
+  useEffect(() => {
+    setValues((current) =>
+      current.lastSyncedAt === settings.lastSyncedAt
+        ? current
+        : { ...current, lastSyncedAt: settings.lastSyncedAt },
+    );
+  }, [settings.lastSyncedAt]);
 
   function changeValue<Field extends keyof AppSettings>(
     field: Field,
@@ -1416,7 +1483,10 @@ function SettingsDialog({
     setSaving(true);
     setErrors({});
     try {
-      const saved = await saveSettings(values);
+      const saved = await saveSettings({
+        ...values,
+        lastSyncedAt: settings.lastSyncedAt,
+      });
       onSaved(saved);
     } catch (error) {
       setErrors({
@@ -1491,7 +1561,7 @@ function SettingsDialog({
           <section className="settings-section" aria-labelledby="settings-webdav-heading">
             <div className="settings-section__heading">
               <h3 id="settings-webdav-heading">WebDAV 同步</h3>
-              <p>用于在不同设备之间备份内容库，后续版本会启用自动同步。</p>
+              <p>按更新时间合并不同设备的内容库，删除操作会通过回收站同步。</p>
             </div>
             <div className="settings-section__fields">
               <div className="form-field">
@@ -1577,6 +1647,32 @@ function SettingsDialog({
                 />
                 <span>启用 WebDAV 自动同步</span>
               </label>
+
+              <div className="settings-sync">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!settings.webdavEnabled || syncing}
+                  onClick={onSyncNow}
+                >
+                  {syncing ? "同步中…" : "立即同步"}
+                </button>
+                <p className="field-hint">
+                  修改服务器信息后请先保存设置，再立即同步。
+                </p>
+              </div>
+              {syncState.phase === "synced" && syncState.report ? (
+                <p className="settings-sync-result" role="status">
+                  同步完成：合并 {syncState.report.merged} 项，上传{" "}
+                  {syncState.report.uploaded} 项，下载{" "}
+                  {syncState.report.downloaded} 项。
+                </p>
+              ) : null}
+              {syncState.phase === "error" && syncState.message ? (
+                <p className="settings-sync-result settings-sync-result--error" role="alert">
+                  {syncState.message}
+                </p>
+              ) : null}
 
               <div className="form-field">
                 <label htmlFor="settings-last-synced">上次同步</label>
@@ -1837,6 +1933,8 @@ function Sidebar({
   trashCount,
   statusFilter,
   mediaTypeFilter,
+  syncLabel,
+  syncPhase,
   onStatusFilter,
   onMediaTypeFilter,
   onOpenTrash,
@@ -1848,6 +1946,8 @@ function Sidebar({
   trashCount: number;
   statusFilter: MediaEntry["status"] | "all";
   mediaTypeFilter: MediaType | "all";
+  syncLabel: string;
+  syncPhase: SyncPhase;
   onStatusFilter: (status: MediaEntry["status"] | "all") => void;
   onMediaTypeFilter: (type: MediaType | "all") => void;
   onOpenTrash: () => void;
@@ -1981,6 +2081,16 @@ function Sidebar({
         <div className="sidebar__db-status">
           <span className="sidebar__db-dot" aria-hidden="true" />
           <span>本地数据库 · 离线可用</span>
+          <button
+            className={`sidebar__sync sidebar__sync--${syncPhase}`}
+            type="button"
+            aria-label={`同步状态：${syncLabel}，打开设置`}
+            title={syncLabel}
+            onClick={onOpenSettings}
+          >
+            <span className="sidebar__sync-dot" aria-hidden="true" />
+            <span>{syncLabel}</span>
+          </button>
         </div>
       </div>
     </aside>
@@ -2284,6 +2394,11 @@ function App() {
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [syncState, setSyncState] = useState<SyncState>({
+    phase: "local",
+    lastSyncedAt: null,
+  });
   const [pendingEntryWrites, setPendingEntryWrites] = useState<Set<string>>(
     () => new Set(),
   );
@@ -2310,6 +2425,14 @@ function App() {
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const dialogOpenRef = useRef(false);
+  const settingsRef = useRef(settings);
+  const syncTimerRef = useRef<number | null>(null);
+  const syncInFlightRef = useRef(false);
+  const syncQueuedRef = useRef(false);
+  const initialSyncRequestedRef = useRef(false);
+  const performSyncRef = useRef<() => Promise<void>>(async () => {});
+  const scheduleSyncRef = useRef<() => void>(() => {});
+  settingsRef.current = settings;
 
   dialogOpenRef.current =
     editor !== null ||
@@ -2334,6 +2457,7 @@ function App() {
       delete next[updatedEntry.id];
       return next;
     });
+    scheduleSyncRef.current();
   }
 
   function handleSaved(savedEntry: MediaEntry) {
@@ -2345,6 +2469,19 @@ function App() {
     setSettings(saved);
     setSettingsOpen(false);
     setSettingsNotice("设置已保存");
+    if (!saved.webdavEnabled) {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+      syncQueuedRef.current = false;
+      setSyncState({ phase: "local", lastSyncedAt: saved.lastSyncedAt });
+    } else {
+      setSyncState((current) => ({
+        ...current,
+        lastSyncedAt: current.lastSyncedAt ?? saved.lastSyncedAt,
+      }));
+    }
   }
 
   async function handleEntryWrite(
@@ -2397,6 +2534,7 @@ function App() {
         : current,
     );
     setPendingDeletion(null);
+    scheduleSyncRef.current();
     void loadTrash();
   }
 
@@ -2437,6 +2575,95 @@ function App() {
       }
     }
   }, []);
+
+  const scheduleSync = useCallback(() => {
+    if (!settingsRef.current.webdavEnabled) {
+      return;
+    }
+    if (syncTimerRef.current !== null) {
+      window.clearTimeout(syncTimerRef.current);
+    }
+    syncTimerRef.current = window.setTimeout(() => {
+      syncTimerRef.current = null;
+      void performSyncRef.current();
+    }, SYNC_DEBOUNCE_MS);
+  }, []);
+
+  const performSync = useCallback(async () => {
+    if (!settingsRef.current.webdavEnabled) {
+      return;
+    }
+    if (syncInFlightRef.current) {
+      syncQueuedRef.current = true;
+      return;
+    }
+    if (syncTimerRef.current !== null) {
+      window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+
+    syncInFlightRef.current = true;
+    setSyncState((current) => ({
+      ...current,
+      phase: "syncing",
+      message: undefined,
+      report: undefined,
+    }));
+
+    try {
+      const report = await syncNow();
+      setSyncState({
+        phase: "synced",
+        lastSyncedAt: report.lastSyncedAt,
+        report,
+      });
+      setSettings((current) => ({
+        ...current,
+        lastSyncedAt: report.lastSyncedAt,
+      }));
+      await Promise.all([loadEntries(), loadTrash()]);
+    } catch (error) {
+      setSyncState({
+        phase: "error",
+        lastSyncedAt: settingsRef.current.lastSyncedAt,
+        message: getSyncErrorMessage(error),
+      });
+    } finally {
+      syncInFlightRef.current = false;
+      if (syncQueuedRef.current) {
+        syncQueuedRef.current = false;
+        scheduleSyncRef.current();
+      }
+    }
+  }, [loadEntries, loadTrash]);
+
+  useEffect(() => {
+    performSyncRef.current = performSync;
+    scheduleSyncRef.current = scheduleSync;
+  }, [performSync, scheduleSync]);
+
+  useEffect(
+    () => () => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+    if (initialSyncRequestedRef.current) {
+      return;
+    }
+    initialSyncRequestedRef.current = true;
+    if (settings.webdavEnabled) {
+      void performSyncRef.current();
+    }
+  }, [settingsLoaded, settings.webdavEnabled]);
 
   async function handleRestore(entry: MediaEntry) {
     if (trashWriteLocks.current.has(entry.id)) {
@@ -2501,6 +2728,7 @@ function App() {
       return next;
     });
     setPendingPurge(null);
+    scheduleSyncRef.current();
   }
 
   async function handleEmptyTrash() {
@@ -2508,6 +2736,7 @@ function App() {
     setTrash({ status: "success", entries: [] });
     setTrashWriteErrors({});
     setEmptyTrashOpen(false);
+    scheduleSyncRef.current();
   }
 
   useEffect(() => {
@@ -2526,10 +2755,18 @@ function App() {
       .then((loaded) => {
         if (!cancelled) {
           setSettings(loaded);
+          setSyncState({
+            phase: "local",
+            lastSyncedAt: loaded.lastSyncedAt,
+          });
+          setSettingsLoaded(true);
         }
       })
       .catch(() => {
         // 设置读取失败时保持默认值，打开设置后可重新保存。
+        if (!cancelled) {
+          setSettingsLoaded(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -2617,6 +2854,7 @@ function App() {
         statusFilter === "all" ||
         entry.status === statusFilter),
   );
+  const syncLabel = getSyncLabel(settings, syncState);
 
   function clearFilters() {
     setTitleQuery("");
@@ -2632,6 +2870,8 @@ function App() {
         trashCount={trashEntries.length}
         statusFilter={statusFilter}
         mediaTypeFilter={mediaTypeFilter}
+        syncLabel={syncLabel}
+        syncPhase={syncState.phase}
         onStatusFilter={(status) => {
           setView("library");
           setStatusFilter((current) => (current === status ? "all" : status));
@@ -2744,6 +2984,16 @@ function App() {
           </div>
 
           <div className="topbar__actions">
+            <button
+              className={`sync-chip topbar__sync-chip sync-chip--${syncState.phase}`}
+              type="button"
+              aria-label={`WebDAV 同步状态：${syncLabel}，打开设置`}
+              title={syncLabel}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <span className="sync-chip__dot" aria-hidden="true" />
+              <span className="sync-chip__label">{syncLabel}</span>
+            </button>
             <button
               className="icon-button topbar__import-button"
               type="button"
@@ -3011,6 +3261,7 @@ function App() {
           onClose={() => setImportOpen(false)}
           onImported={() => {
             void loadEntries();
+            scheduleSyncRef.current();
           }}
         />
       ) : null}
@@ -3030,9 +3281,13 @@ function App() {
       {settingsOpen ? (
         <SettingsDialog
           settings={settings}
+          syncState={syncState}
           fallbackFocusRef={addButtonRef}
           onClose={() => setSettingsOpen(false)}
           onSaved={handleSettingsSaved}
+          onSyncNow={() => {
+            void performSyncRef.current();
+          }}
         />
       ) : null}
       {settingsNotice ? (

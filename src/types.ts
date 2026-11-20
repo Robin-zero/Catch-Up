@@ -6,7 +6,7 @@ export type MediaType =
   | "movie"
   | "short_drama";
 
-export type EntryStatus = "tracking" | "completed" | "dropped";
+export type EntryStatus = "tracking" | "completed" | "dropped" | "to_watch";
 
 export interface MediaEntry {
   id: string;
@@ -102,6 +102,7 @@ export const ENTRY_STATUS_LABELS: Record<EntryStatus, string> = {
   tracking: "在追",
   completed: "已完成",
   dropped: "已弃剧",
+  to_watch: "待看",
 };
 
 export const PLATFORM_PRESETS = [

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::settings::AppSettings;
 
-const DATABASE_VERSION: u32 = 4;
+const DATABASE_VERSION: u32 = 5;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -32,7 +32,9 @@ const ENTRIES_V2_DEFINITION: &str = "
         total_progress IS NULL
         OR (typeof(total_progress) = 'integer' AND total_progress > 0)
     ),
-    status TEXT NOT NULL CHECK (status IN ('tracking', 'completed', 'dropped')),
+    status TEXT NOT NULL CHECK (
+        status IN ('tracking', 'completed', 'dropped', 'to_watch')
+    ),
     season INTEGER CHECK (
         season IS NULL
         OR (typeof(season) = 'integer' AND season BETWEEN 1 AND 999)
@@ -119,6 +121,8 @@ pub enum EntryStatus {
     Tracking,
     Completed,
     Dropped,
+    #[serde(rename = "to_watch")]
+    ToWatch,
 }
 
 impl EntryStatus {
@@ -127,6 +131,7 @@ impl EntryStatus {
             Self::Tracking => "tracking",
             Self::Completed => "completed",
             Self::Dropped => "dropped",
+            Self::ToWatch => "to_watch",
         }
     }
 
@@ -135,6 +140,7 @@ impl EntryStatus {
             "tracking" => Ok(Self::Tracking),
             "completed" => Ok(Self::Completed),
             "dropped" => Ok(Self::Dropped),
+            "to_watch" => Ok(Self::ToWatch),
             _ => Err(format!("数据库包含未知追更状态：{value}")),
         }
     }
@@ -243,8 +249,8 @@ impl EntryInput {
             return Err("当前进度不能超过总进度".to_owned());
         }
 
-        let status = if self.status == EntryStatus::Dropped {
-            EntryStatus::Dropped
+        let status = if self.status == EntryStatus::Dropped || self.status == EntryStatus::ToWatch {
+            self.status
         } else if self.total_progress == Some(self.current_progress) {
             EntryStatus::Completed
         } else {
@@ -817,6 +823,37 @@ impl Database {
 
                     DROP TABLE entries;
                     ALTER TABLE entries_v2 RENAME TO entries;
+                    ",
+                )
+                .map_err(|error| format!("无法升级数据库表：{error}"))?;
+        } else if !entries_status_allows_to_watch(&transaction)
+            .map_err(|error| format!("无法检查数据库表结构：{error}"))?
+        {
+            // v4 → v5：重建 entries 表，把状态约束扩展为支持“待看”。
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS entries_v5;")
+                .map_err(|error| format!("无法清理旧迁移表：{error}"))?;
+            transaction
+                .execute_batch(&format!(
+                    "CREATE TABLE entries_v5 ({ENTRIES_V2_DEFINITION});"
+                ))
+                .map_err(|error| format!("无法创建新版数据库表：{error}"))?;
+            transaction
+                .execute_batch(
+                    "
+                    INSERT INTO entries_v5 (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    )
+                    SELECT
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    FROM entries;
+
+                    DROP TABLE entries;
+                    ALTER TABLE entries_v5 RENAME TO entries;
                     ",
                 )
                 .map_err(|error| format!("无法升级数据库表：{error}"))?;
@@ -1504,6 +1541,17 @@ fn table_columns(connection: &Connection, name: &str) -> rusqlite::Result<Vec<St
     let mut statement = connection.prepare(&format!("PRAGMA table_info({name})"))?;
     let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
     rows.collect()
+}
+
+fn entries_status_allows_to_watch(connection: &Connection) -> rusqlite::Result<bool> {
+    let definition: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(definition.is_some_and(|text| text.contains("'to_watch'")))
 }
 
 fn query_entries(
@@ -2362,6 +2410,44 @@ mod tests {
         assert_eq!(updated.current_progress, 5);
         assert_eq!(updated.status, EntryStatus::Dropped);
         assert_error(database.adjust_progress(&at_total.id, 1), "不能继续增加");
+    }
+
+    #[test]
+    fn to_watch_status_persists_and_starts_tracking_on_progress() {
+        let (_directory, database) = test_database();
+        assert_eq!(
+            serde_json::to_value(EntryStatus::ToWatch).unwrap(),
+            json!("to_watch")
+        );
+        let decoded: EntryStatus = serde_json::from_value(json!("to_watch")).unwrap();
+        assert_eq!(decoded, EntryStatus::ToWatch);
+
+        let planned = database
+            .create_entry(EntryInput {
+                current_progress: 0,
+                total_progress: Some(12),
+                status: EntryStatus::ToWatch,
+                ..input("待看新剧")
+            })
+            .unwrap();
+        assert_eq!(planned.status, EntryStatus::ToWatch);
+        assert_eq!(planned.current_progress, 0);
+
+        // 达到总进度时，待看不会被自动标记为已完成。
+        let full = database
+            .create_entry(EntryInput {
+                current_progress: 12,
+                total_progress: Some(12),
+                status: EntryStatus::ToWatch,
+                ..input("待看但全集")
+            })
+            .unwrap();
+        assert_eq!(full.status, EntryStatus::ToWatch);
+
+        // 记录进度即代表开始追更，状态转为在追。
+        let started = database.adjust_progress(&planned.id, 1).unwrap();
+        assert_eq!(started.current_progress, 1);
+        assert_eq!(started.status, EntryStatus::Tracking);
     }
 
     #[test]
@@ -3264,5 +3350,93 @@ mod tests {
             .unwrap();
         assert_eq!(unknown, "on");
         assert_eq!(reopened.list_entries().unwrap()[0].id, "v2-entry");
+    }
+
+    #[test]
+    fn v4_database_upgrades_to_allow_to_watch_status() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE entries (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        title TEXT NOT NULL,
+                        media_type TEXT NOT NULL CHECK (
+                            media_type IN ('drama','anime','variety','novel','movie','short_drama')
+                        ),
+                        current_progress INTEGER NOT NULL CHECK (current_progress >= 0),
+                        total_progress INTEGER,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('tracking','completed','dropped')
+                        ),
+                        season INTEGER CHECK (season BETWEEN 1 AND 999),
+                        rating REAL CHECK (rating >= 0 AND rating <= 10),
+                        platform TEXT CHECK (length(platform) <= 100),
+                        cover_url TEXT CHECK (
+                            cover_url IS NULL OR length(cover_url) <= 500
+                        ),
+                        overview TEXT CHECK (length(overview) <= 2000),
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        deleted_at TEXT
+                    );
+                    CREATE INDEX entries_updated_at_id_idx
+                        ON entries (updated_at DESC, id ASC);
+                    CREATE INDEX entries_deleted_at_idx
+                        ON entries (deleted_at DESC);
+                    CREATE TABLE purged_entries (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        purged_at TEXT NOT NULL
+                    );
+                    CREATE TABLE settings (
+                        key TEXT PRIMARY KEY NOT NULL,
+                        value TEXT NOT NULL
+                    );
+                    PRAGMA user_version = 4;
+                    ",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    ) VALUES (?1, ?2, 'drama', 1, 12, 'tracking', NULL, NULL, NULL,
+                        NULL, NULL, ?3, ?3, NULL)
+                    ",
+                    params![
+                        "old-entry",
+                        "旧版 v4 条目",
+                        "2024-01-01T00:00:00.000000000Z"
+                    ],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let entries = database.list_entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "old-entry");
+
+        // 升级后应允许写入“待看”状态。
+        let planned = database
+            .create_entry(EntryInput {
+                status: EntryStatus::ToWatch,
+                ..input("新待看")
+            })
+            .unwrap();
+        assert_eq!(planned.status, EntryStatus::ToWatch);
+
+        let version: u32 = database
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
     }
 }

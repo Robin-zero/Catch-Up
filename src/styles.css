@@ -958,6 +958,11 @@ svg {
   color: #9a6c22;
 }
 
+.status-pill--to_watch {
+  background: #e8f0fb;
+  color: #3a6fb0;
+}
+
 .entry__meta {
   display: flex;
   align-items: center;

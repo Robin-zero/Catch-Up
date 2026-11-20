@@ -1642,6 +1642,33 @@ describe("短剧与条目元数据", () => {
     expect(statusSelect).toHaveValue("dropped");
   });
 
+  it("待看条目使用独立胶囊，快捷按钮为开始追更并切换到在追", async () => {
+    const user = userEvent.setup();
+    const toWatch = makeEntry({
+      id: "to-watch",
+      title: "准备追的新剧",
+      status: "to_watch",
+    });
+    mockedListEntries.mockResolvedValue([toWatch]);
+    mockedSetEntryStatus.mockResolvedValue({
+      ...toWatch,
+      status: "tracking",
+      updatedAt: "2026-11-20T05:00:00.000Z",
+    });
+
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: toWatch.title });
+    const pill = within(card).getByText("待看");
+    expect(pill).toHaveClass("status-pill", "status-pill--to_watch");
+
+    await user.click(
+      within(card).getByRole("button", { name: "开始追更《准备追的新剧》" }),
+    );
+
+    expect(mockedSetEntryStatus).toHaveBeenCalledWith(toWatch.id, "tracking");
+  });
+
   it("表单保存季、评分、平台、封面和简介，并渲染后端结果", async () => {
     const user = userEvent.setup();
     const coverUrl = "https://example.com/new.jpg";

@@ -149,7 +149,7 @@ const MEDIA_TYPE_ICONS: Record<MediaType, ReactNode> = {
 };
 
 const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
-const ENTRY_STATUSES = ["tracking", "completed", "dropped"] as const;
+const ENTRY_STATUSES = ["tracking", "completed", "dropped", "to_watch"] as const;
 
 function BrandMark({ size = 28 }: { size?: number }) {
   return (
@@ -1960,15 +1960,18 @@ function Sidebar({
     ) as Record<MediaType, number>;
     let completed = 0;
     let tracking = 0;
+    let toWatch = 0;
     for (const entry of entries) {
       byType[entry.mediaType] += 1;
       if (entry.status === "completed") {
         completed += 1;
       } else if (entry.status === "tracking") {
         tracking += 1;
+      } else if (entry.status === "to_watch") {
+        toWatch += 1;
       }
     }
-    return { byType, completed, tracking };
+    return { byType, completed, tracking, toWatch };
   }, [entries]);
 
   return (
@@ -1994,6 +1997,19 @@ function Sidebar({
           </svg>
           <span className="sidebar__label">全部条目</span>
           <span className="sidebar__count">{entries.length}</span>
+        </button>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={view === "library" && statusFilter === "to_watch"}
+          onClick={() => onStatusFilter("to_watch")}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M5 5.5h10a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 13V7A1.5 1.5 0 0 1 5 5.5Z" />
+            <path d="m8 8.2 4.5 1.8-4.5 1.8v-3.6Z" />
+          </svg>
+          <span className="sidebar__label">待看</span>
+          <span className="sidebar__count">{counts.toWatch}</span>
         </button>
         <button
           className="sidebar__item"
@@ -2321,20 +2337,29 @@ function EntryRow({
                 className="ghost-button"
                 type="button"
                 aria-label={
-                  entry.status === "completed"
-                    ? `重新追更《${entry.title}》`
-                    : `标记《${entry.title}》完成`
+                  entry.status === "to_watch"
+                    ? `开始追更《${entry.title}》`
+                    : entry.status === "completed"
+                      ? `重新追更《${entry.title}》`
+                      : `标记《${entry.title}》完成`
                 }
                 disabled={pending}
                 onClick={() =>
                   onWrite?.({
                     type: "status",
                     status:
-                      entry.status === "completed" ? "tracking" : "completed",
+                      entry.status === "to_watch" ||
+                      entry.status === "completed"
+                        ? "tracking"
+                        : "completed",
                   })
                 }
               >
-                {entry.status === "completed" ? "重新追更" : "标记完成"}
+                {entry.status === "to_watch"
+                  ? "开始追更"
+                  : entry.status === "completed"
+                    ? "重新追更"
+                    : "标记完成"}
               </button>
               <div className="entry__icon-actions">
                 <button
@@ -3181,6 +3206,21 @@ function App() {
             <path d="M4 6.5h16M4 12h16M4 17.5h16" />
           </svg>
           <span>内容库</span>
+        </button>
+        <button
+          className="tabbar__item"
+          type="button"
+          aria-pressed={view === "library" && statusFilter === "to_watch"}
+          onClick={() => {
+            setView("library");
+            setStatusFilter("to_watch");
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5.5 6.5h13a1.8 1.8 0 0 1 1.8 1.8v7.4a1.8 1.8 0 0 1-1.8 1.8h-13A1.8 1.8 0 0 1 3.7 15.7V8.3A1.8 1.8 0 0 1 5.5 6.5Z" />
+            <path d="m9.8 9.7 5 2.3-5 2.3v-4.6Z" />
+          </svg>
+          <span>待看</span>
         </button>
         <button
           className="tabbar__item"

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::Path,
     sync::{Mutex, MutexGuard},
@@ -11,7 +11,9 @@ use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, Transact
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const DATABASE_VERSION: u32 = 2;
+use crate::settings::AppSettings;
+
+const DATABASE_VERSION: u32 = 3;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -798,9 +800,13 @@ impl Database {
                     ON entries (updated_at DESC, id ASC);
                 CREATE INDEX IF NOT EXISTS entries_deleted_at_idx
                     ON entries (deleted_at DESC);
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 ",
             )
-            .map_err(|error| format!("无法创建数据库索引：{error}"))?;
+            .map_err(|error| format!("无法创建数据库索引或设置表：{error}"))?;
         transaction
             .pragma_update(None, "user_version", DATABASE_VERSION)
             .map_err(|error| format!("无法写入数据库版本：{error}"))?;
@@ -1187,6 +1193,78 @@ impl Database {
             .commit()
             .map_err(|error| format!("无法完成状态更新：{error}"))?;
         Ok(updated)
+    }
+
+    pub fn get_settings(&self) -> Result<AppSettings, String> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT key, value FROM settings")
+            .map_err(|error| format!("无法准备设置查询：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("无法查询设置：{error}"))?;
+
+        let mut values = HashMap::new();
+        for row in rows {
+            let (key, value) = row.map_err(|error| format!("无法读取设置：{error}"))?;
+            values.insert(key, value);
+        }
+
+        let text = |key: &str| values.get(key).cloned().unwrap_or_default();
+        Ok(AppSettings {
+            tmdb_api_key: text("tmdb_api_key"),
+            webdav_url: text("webdav_url"),
+            webdav_username: text("webdav_username"),
+            webdav_password: text("webdav_password"),
+            webdav_enabled: values
+                .get("webdav_enabled")
+                .is_some_and(|value| value == "true"),
+            last_synced_at: values
+                .get("last_synced_at")
+                .filter(|value| !value.trim().is_empty())
+                .cloned(),
+        })
+    }
+
+    pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let settings = settings.validate()?;
+        let webdav_enabled = if settings.webdav_enabled {
+            "true"
+        } else {
+            "false"
+        };
+        let last_synced_at = settings.last_synced_at.as_deref().unwrap_or("");
+        let entries = [
+            ("tmdb_api_key", settings.tmdb_api_key.as_str()),
+            ("webdav_url", settings.webdav_url.as_str()),
+            ("webdav_username", settings.webdav_username.as_str()),
+            ("webdav_password", settings.webdav_password.as_str()),
+            ("webdav_enabled", webdav_enabled),
+            ("last_synced_at", last_synced_at),
+        ];
+
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("无法启动保存设置事务：{error}"))?;
+        for (key, value) in entries {
+            transaction
+                .execute(
+                    "
+                    INSERT INTO settings (key, value) VALUES (?1, ?2)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    ",
+                    params![key, value],
+                )
+                .map_err(|error| format!("保存设置失败：{error}"))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("无法完成设置保存：{error}"))?;
+
+        Ok(settings)
     }
 }
 
@@ -2686,5 +2764,196 @@ mod tests {
         assert_eq!(completed.current_progress, 5);
         assert_eq!(completed.total_progress, Some(5));
         assert_eq!(completed.status, EntryStatus::Completed);
+    }
+
+    #[test]
+    fn settings_default_to_empty_values_when_not_configured() {
+        let (_directory, database) = test_database();
+
+        assert_eq!(database.get_settings().unwrap(), AppSettings::default());
+    }
+
+    #[test]
+    fn settings_round_trip_and_persist_across_reopens() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        let saved = {
+            let database = Database::open(&path).unwrap();
+            database
+                .save_settings(AppSettings {
+                    tmdb_api_key: "  tmdb-key  ".to_owned(),
+                    webdav_url: " https://dav.example.com/catchup ".to_owned(),
+                    webdav_username: " alice ".to_owned(),
+                    webdav_password: " secret ".to_owned(),
+                    webdav_enabled: true,
+                    last_synced_at: Some(" 2026-11-20T00:00:00.000Z ".to_owned()),
+                })
+                .unwrap()
+        };
+
+        assert_eq!(saved.tmdb_api_key, "tmdb-key");
+        assert_eq!(saved.webdav_url, "https://dav.example.com/catchup");
+        assert_eq!(saved.webdav_username, "alice");
+        assert_eq!(saved.webdav_password, " secret ");
+        assert_eq!(
+            saved.last_synced_at.as_deref(),
+            Some("2026-11-20T00:00:00.000Z")
+        );
+
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(reopened.get_settings().unwrap(), saved);
+    }
+
+    #[test]
+    fn settings_require_webdav_url_and_username_when_enabled() {
+        let (_directory, database) = test_database();
+
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_enabled: true,
+                webdav_url: "   ".to_owned(),
+                webdav_username: "alice".to_owned(),
+                ..AppSettings::default()
+            }),
+            "启用 WebDAV 自动同步时，请填写服务器地址",
+        );
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_enabled: true,
+                webdav_url: "https://dav.example.com".to_owned(),
+                webdav_username: "  ".to_owned(),
+                ..AppSettings::default()
+            }),
+            "启用 WebDAV 自动同步时，请填写用户名",
+        );
+
+        database
+            .save_settings(AppSettings {
+                webdav_enabled: false,
+                ..AppSettings::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn settings_validate_webdav_url_and_field_lengths() {
+        let (_directory, database) = test_database();
+
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_url: "ftp://dav.example.com".to_owned(),
+                ..AppSettings::default()
+            }),
+            "WebDAV 服务器地址仅支持 http 或 https 链接",
+        );
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_url: format!("https://example.com/{}", "a".repeat(500)),
+                ..AppSettings::default()
+            }),
+            "WebDAV 服务器地址不能超过 500 个字符",
+        );
+        assert_error(
+            database.save_settings(AppSettings {
+                tmdb_api_key: "a".repeat(201),
+                ..AppSettings::default()
+            }),
+            "TMDB API Key 不能超过 200 个字符",
+        );
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_username: "a".repeat(201),
+                ..AppSettings::default()
+            }),
+            "WebDAV 用户名不能超过 200 个字符",
+        );
+        assert_error(
+            database.save_settings(AppSettings {
+                webdav_password: "a".repeat(501),
+                ..AppSettings::default()
+            }),
+            "WebDAV 密码不能超过 500 个字符",
+        );
+    }
+
+    #[test]
+    fn v2_database_upgrades_to_v3_and_keeps_settings_extensible() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(&format!(
+                    "
+                    CREATE TABLE entries ({ENTRIES_V2_DEFINITION});
+                    CREATE INDEX entries_updated_at_id_idx
+                        ON entries (updated_at DESC, id ASC);
+                    CREATE INDEX entries_deleted_at_idx
+                        ON entries (deleted_at DESC);
+                    PRAGMA user_version = 2;
+                    "
+                ))
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    ) VALUES (?1, ?2, 'drama', 4, 12, 'tracking', 2, 8.6, '腾讯视频',
+                        'https://example.com/cover.jpg', '简介', ?3, ?3, NULL)
+                    ",
+                    params!["v2-entry", "旧版 v2 条目", "2024-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.get_settings().unwrap(), AppSettings::default());
+        let entries = database.list_entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "v2-entry");
+        assert_eq!(entries[0].season, Some(2));
+        assert_eq!(entries[0].rating, Some(8.6));
+
+        {
+            let connection = database.lock().unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 3);
+            connection
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('future_feature', 'on')",
+                    [],
+                )
+                .unwrap();
+        }
+
+        database
+            .save_settings(AppSettings {
+                tmdb_api_key: "persisted-key".to_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        drop(database);
+
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(
+            reopened.get_settings().unwrap().tmdb_api_key,
+            "persisted-key"
+        );
+        let unknown: String = reopened
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'future_feature'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unknown, "on");
+        assert_eq!(reopened.list_entries().unwrap()[0].id, "v2-entry");
     }
 }

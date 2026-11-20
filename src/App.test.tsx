@@ -13,16 +13,26 @@ import {
   createEntry,
   deleteEntry,
   emptyTrash,
+  getSettings,
   importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
   restoreEntry,
+  saveSettings,
+  searchTmdb,
   setEntryStatus,
   updateEntry,
 } from "./api";
 import App from "./App";
-import type { ImportReport, MediaEntry, MediaType } from "./types";
+import {
+  DEFAULT_SETTINGS,
+  type AppSettings,
+  type ImportReport,
+  type MediaEntry,
+  type MediaType,
+  type ScrapeCandidate,
+} from "./types";
 
 vi.mock("./api", () => ({
   listEntries: vi.fn(),
@@ -36,6 +46,9 @@ vi.mock("./api", () => ({
   importMarkdown: vi.fn(),
   adjustProgress: vi.fn(),
   setEntryStatus: vi.fn(),
+  getSettings: vi.fn(),
+  saveSettings: vi.fn(),
+  searchTmdb: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
   ),
@@ -52,6 +65,9 @@ const mockedEmptyTrash = vi.mocked(emptyTrash);
 const mockedImportMarkdown = vi.mocked(importMarkdown);
 const mockedAdjustProgress = vi.mocked(adjustProgress);
 const mockedSetEntryStatus = vi.mocked(setEntryStatus);
+const mockedGetSettings = vi.mocked(getSettings);
+const mockedSaveSettings = vi.mocked(saveSettings);
+const mockedSearchTmdb = vi.mocked(searchTmdb);
 
 function makeEntry(overrides: Partial<MediaEntry> = {}): MediaEntry {
   return {
@@ -88,12 +104,17 @@ beforeEach(() => {
   mockedImportMarkdown.mockReset();
   mockedAdjustProgress.mockReset();
   mockedSetEntryStatus.mockReset();
+  mockedGetSettings.mockReset();
+  mockedGetSettings.mockResolvedValue({ ...DEFAULT_SETTINGS });
+  mockedSaveSettings.mockReset();
+  mockedSearchTmdb.mockReset();
 });
 
 describe("内容库", () => {
   it("启动时显示明确的加载状态", () => {
     mockedListEntries.mockReturnValue(new Promise(() => {}));
     mockedListTrash.mockReturnValue(new Promise(() => {}));
+    mockedGetSettings.mockReturnValue(new Promise(() => {}));
 
     render(<App />);
 
@@ -1941,5 +1962,307 @@ describe("Markdown 清单导入", () => {
     expect(
       within(dialog).getByText(/成功导入 1 条，跳过 0 条/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("设置中心", () => {
+  async function renderApp() {
+    mockedListEntries.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await waitFor(() => expect(mockedGetSettings).toHaveBeenCalledTimes(1));
+  }
+
+  async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(within(sidebar).getByRole("button", { name: "设置" }));
+    return screen.getByRole("dialog", { name: "设置" });
+  }
+
+  it("从侧边栏打开设置并回填已保存的设置", async () => {
+    mockedGetSettings.mockResolvedValue({
+      tmdbApiKey: "tmdb-abc",
+      webdavUrl: "https://dav.example.com/catchup",
+      webdavUsername: "alice",
+      webdavPassword: "secret",
+      webdavEnabled: true,
+      lastSyncedAt: "2026-11-01T08:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    await renderApp();
+
+    const dialog = await openSettings(user);
+
+    expect(within(dialog).getByLabelText("TMDB API Key")).toHaveValue(
+      "tmdb-abc",
+    );
+    expect(within(dialog).getByLabelText("服务器地址")).toHaveValue(
+      "https://dav.example.com/catchup",
+    );
+    expect(within(dialog).getByLabelText("用户名")).toHaveValue("alice");
+    expect(within(dialog).getByLabelText("密码")).toHaveValue("secret");
+    expect(
+      within(dialog).getByRole("checkbox", {
+        name: "启用 WebDAV 自动同步",
+      }),
+    ).toBeChecked();
+    expect(within(dialog).getByLabelText("上次同步")).not.toHaveValue(
+      "尚未同步",
+    );
+    const mobileButton = screen
+      .getAllByRole("button", { name: "设置" })
+      .find((button) => button.classList.contains("topbar__settings-button"));
+    expect(mobileButton).toBeDefined();
+  });
+
+  it("保存设置时传递完整参数、关闭对话框并提示成功", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+    mockedSaveSettings.mockImplementation(async (settings) => settings);
+
+    const apiKey = within(dialog).getByLabelText("TMDB API Key");
+    await user.type(apiKey, "new-key");
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "设置" })).toBeNull(),
+    );
+    expect(mockedSaveSettings).toHaveBeenCalledWith({
+      ...DEFAULT_SETTINGS,
+      tmdbApiKey: "new-key",
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("设置已保存");
+  });
+
+  it("保存失败时保留输入并显示错误", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+    mockedSaveSettings.mockRejectedValue("设置保存失败，请重试。");
+
+    const apiKey = within(dialog).getByLabelText("TMDB API Key");
+    await user.type(apiKey, "draft-key");
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "设置保存失败，请重试。",
+    );
+    expect(within(dialog).getByLabelText("TMDB API Key")).toHaveValue(
+      "draft-key",
+    );
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+  });
+
+  it("启用 WebDAV 时在前端校验必填项并阻止保存", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+
+    await user.click(
+      within(dialog).getByRole("checkbox", {
+        name: "启用 WebDAV 自动同步",
+      }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    expect(
+      within(dialog).getByText("启用自动同步时请填写服务器地址。"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("启用自动同步时请填写用户名。")).toBeInTheDocument();
+    expect(mockedSaveSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+  });
+});
+
+describe("TMDB 元数据刮削", () => {
+  const candidate: ScrapeCandidate = {
+    sourceId: 693134,
+    title: "沙丘 2",
+    originalTitle: "Dune: Part Two",
+    year: 2024,
+    posterUrl: "https://image.tmdb.org/t/p/w500/poster.jpg",
+    rating: 8.2,
+    overview: "保罗与弗雷曼人联手，向背叛者复仇。",
+    kind: "movie",
+  };
+
+  async function renderApp(settings: Partial<AppSettings> = {}) {
+    mockedGetSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      ...settings,
+    });
+    mockedListEntries.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await waitFor(() => expect(mockedGetSettings).toHaveBeenCalledTimes(1));
+  }
+
+  async function openCreateForm(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    return screen.getByRole("dialog", { name: "添加条目" });
+  }
+
+  async function openScrapeDialog(
+    user: ReturnType<typeof userEvent.setup>,
+    form: HTMLElement,
+  ) {
+    await user.click(
+      within(form).getByRole("button", { name: "从 TMDB 刮削" }),
+    );
+    return screen.getByRole("dialog", { name: "从 TMDB 刮削" });
+  }
+
+  it("在添加表单标题旁打开刮削对话框并预填当前标题", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "沙丘");
+
+    const scrape = await openScrapeDialog(user, form);
+
+    expect(within(scrape).getByLabelText("搜索标题")).toHaveValue("沙丘");
+    expect(mockedSearchTmdb).not.toHaveBeenCalled();
+  });
+
+  it("缺少 API Key 时提示并可直接打开设置", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const form = await openCreateForm(user);
+    const scrape = await openScrapeDialog(user, form);
+
+    expect(within(scrape).getByRole("alert")).toHaveTextContent(
+      "请先在设置中填写 TMDB API Key",
+    );
+    expect(within(scrape).getByRole("button", { name: "搜索" })).toBeDisabled();
+
+    await user.click(within(scrape).getByRole("button", { name: "打开设置" }));
+
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+  });
+
+  it("渲染搜索结果中的封面、原名、年份、评分和简介", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "沙丘");
+    const scrape = await openScrapeDialog(user, form);
+    mockedSearchTmdb.mockResolvedValue([candidate]);
+
+    await user.click(within(scrape).getByRole("button", { name: "搜索" }));
+
+    const result = await within(scrape).findByRole("article", {
+      name: "沙丘 2",
+    });
+    expect(within(result).getByText("Dune: Part Two · 2024 年")).toBeInTheDocument();
+    expect(within(result).getByText("评分 8.2")).toBeInTheDocument();
+    expect(
+      within(result).getByText("保罗与弗雷曼人联手，向背叛者复仇。"),
+    ).toBeInTheDocument();
+    expect(result.querySelector("img")).toHaveAttribute(
+      "src",
+      "https://image.tmdb.org/t/p/w500/poster.jpg",
+    );
+    expect(mockedSearchTmdb).toHaveBeenCalledWith("沙丘", "drama");
+  });
+
+  it("使用结果回填封面、评分和简介且不覆盖已有标题，其它输入保持", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.selectOptions(within(form).getByLabelText("类型"), "movie");
+    await user.type(within(form).getByLabelText("标题"), "我的沙丘");
+    await user.type(within(form).getByLabelText("平台"), "腾讯视频");
+    await user.type(within(form).getByLabelText(/当前进度/), "1");
+    const scrape = await openScrapeDialog(user, form);
+    mockedSearchTmdb.mockResolvedValue([candidate]);
+    await user.click(within(scrape).getByRole("button", { name: "搜索" }));
+
+    await user.click(
+      await within(scrape).findByRole("button", { name: "使用此结果" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "从 TMDB 刮削" }),
+      ).toBeNull(),
+    );
+    expect(within(form).getByLabelText("标题")).toHaveValue("我的沙丘");
+    expect(within(form).getByLabelText("封面 URL")).toHaveValue(
+      "https://image.tmdb.org/t/p/w500/poster.jpg",
+    );
+    expect(within(form).getByLabelText("评分")).toHaveValue(8.2);
+    expect(within(form).getByLabelText("简介")).toHaveValue(
+      "保罗与弗雷曼人联手，向背叛者复仇。",
+    );
+    expect(within(form).getByLabelText("平台")).toHaveValue("腾讯视频");
+    expect(within(form).getByLabelText(/当前进度/)).toHaveValue(1);
+    expect(mockedSearchTmdb).toHaveBeenCalledWith("我的沙丘", "movie");
+  });
+
+  it("标题为空时使用结果标题填充", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.selectOptions(within(form).getByLabelText("类型"), "movie");
+    const scrape = await openScrapeDialog(user, form);
+    mockedSearchTmdb.mockResolvedValue([candidate]);
+    fireEvent.change(within(scrape).getByLabelText("搜索标题"), {
+      target: { value: "沙丘" },
+    });
+    await user.click(within(scrape).getByRole("button", { name: "搜索" }));
+
+    await user.click(
+      await within(scrape).findByRole("button", { name: "使用此结果" }),
+    );
+
+    expect(within(form).getByLabelText("标题")).toHaveValue("沙丘 2");
+  });
+
+  it("搜索失败时显示中文错误并保留打开设置入口", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "沙丘");
+    const scrape = await openScrapeDialog(user, form);
+    mockedSearchTmdb.mockRejectedValue(
+      "TMDB 请求失败（HTTP 500），请稍后重试。",
+    );
+
+    await user.click(within(scrape).getByRole("button", { name: "搜索" }));
+
+    expect(await within(scrape).findByRole("alert")).toHaveTextContent(
+      "TMDB 请求失败（HTTP 500），请稍后重试。",
+    );
+    expect(
+      within(scrape).getByRole("button", { name: "打开设置" }),
+    ).toBeInTheDocument();
+    expect(within(scrape).getByLabelText("搜索标题")).toHaveValue("沙丘");
+  });
+
+  it("搜索中禁用重复提交，空结果给出提示", async () => {
+    const user = userEvent.setup();
+    await renderApp({ tmdbApiKey: "tmdb-key" });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "不存在的剧");
+    const scrape = await openScrapeDialog(user, form);
+    const deferred = createDeferred<ScrapeCandidate[]>();
+    mockedSearchTmdb.mockReturnValue(deferred.promise);
+
+    const submit = within(scrape).getByRole("button", { name: "搜索" });
+    await user.click(submit);
+    expect(within(scrape).getByRole("button", { name: "搜索中…" })).toBeDisabled();
+    expect(mockedSearchTmdb).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      deferred.resolve([]);
+    });
+
+    expect(
+      await within(scrape).findByText(
+        "没有找到匹配的结果，试试其他关键词。",
+      ),
+    ).toBeInTheDocument();
+    expect(within(scrape).getByRole("button", { name: "搜索" })).toBeEnabled();
   });
 });

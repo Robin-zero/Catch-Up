@@ -15,23 +15,29 @@ import {
   deleteEntry,
   emptyTrash,
   getLibraryErrorMessage,
+  getSettings,
   importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
   restoreEntry,
+  saveSettings,
+  searchTmdb,
   setEntryStatus,
   updateEntry,
 } from "./api";
 import {
+  DEFAULT_SETTINGS,
   ENTRY_STATUS_LABELS,
   MEDIA_TYPE_LABELS,
   MEDIA_TYPE_UNITS,
   PLATFORM_PRESETS,
+  type AppSettings,
   type EntryInput,
   type ImportReport,
   type MediaEntry,
   type MediaType,
+  type ScrapeCandidate,
 } from "./types";
 
 type LibraryState =
@@ -259,6 +265,7 @@ interface DialogProps {
   title: string;
   titleId: string;
   busy?: boolean;
+  active?: boolean;
   initialFocusRef: RefObject<HTMLElement | null>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -270,6 +277,7 @@ function Dialog({
   title,
   titleId,
   busy = false,
+  active = true,
   initialFocusRef,
   fallbackFocusRef,
   onClose,
@@ -284,6 +292,9 @@ function Dialog({
   }, [onClose]);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     const previouslyFocused =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -298,9 +309,12 @@ function Dialog({
         fallbackFocus?.focus();
       }
     };
-  }, [fallbackFocusRef, initialFocusRef]);
+  }, [active, fallbackFocusRef, initialFocusRef]);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         if (!busy) {
@@ -342,13 +356,15 @@ function Dialog({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [busy]);
+  }, [busy, active]);
 
   return (
     <div
       className="dialog-backdrop"
+      inert={!active}
+      aria-hidden={active ? undefined : true}
       onMouseDown={(event) => {
-        if (!busy && event.target === event.currentTarget) {
+        if (active && !busy && event.target === event.currentTarget) {
           onClose();
         }
       }}
@@ -422,12 +438,18 @@ function getWriteErrorMessage(error: unknown, fallback: string): string {
 
 function EntryFormDialog({
   editor,
+  settings,
+  settingsOpen,
   fallbackFocusRef,
+  onOpenSettings,
   onClose,
   onSaved,
 }: {
   editor: Exclude<EditorState, null>;
+  settings: AppSettings;
+  settingsOpen: boolean;
   fallbackFocusRef: RefObject<HTMLElement | null>;
+  onOpenSettings: () => void;
   onClose: () => void;
   onSaved: (entry: MediaEntry) => void;
 }) {
@@ -454,6 +476,7 @@ function EntryFormDialog({
   }));
   const [errors, setErrors] = useState<EntryFormErrors>({});
   const [saving, setSaving] = useState(false);
+  const [scrapeOpen, setScrapeOpen] = useState(false);
   const savingRef = useRef(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const currentProgressRef = useRef<HTMLInputElement>(null);
@@ -479,6 +502,26 @@ function EntryFormDialog({
         : {}),
       form: undefined,
     }));
+  }
+
+  function applyScrapeCandidate(candidate: ScrapeCandidate) {
+    setValues((current) => ({
+      ...current,
+      title: current.title.trim() ? current.title : candidate.title,
+      coverUrl: candidate.posterUrl ?? current.coverUrl,
+      rating:
+        candidate.rating !== null ? String(candidate.rating) : current.rating,
+      overview: candidate.overview ?? current.overview,
+    }));
+    setErrors((current) => ({
+      ...current,
+      title: undefined,
+      coverUrl: undefined,
+      rating: undefined,
+      overview: undefined,
+      form: undefined,
+    }));
+    setScrapeOpen(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -601,15 +644,17 @@ function EntryFormDialog({
   }
 
   return (
-    <Dialog
-      title={editingEntry ? "编辑条目" : "添加条目"}
-      titleId={titleId}
-      busy={saving}
-      initialFocusRef={titleRef}
-      fallbackFocusRef={fallbackFocusRef}
-      onClose={onClose}
-      className="dialog--form"
-    >
+    <>
+      <Dialog
+        title={editingEntry ? "编辑条目" : "添加条目"}
+        titleId={titleId}
+        busy={saving}
+        active={!scrapeOpen && !settingsOpen}
+        initialFocusRef={titleRef}
+        fallbackFocusRef={fallbackFocusRef}
+        onClose={onClose}
+        className="dialog--form"
+      >
       <form className="entry-form" noValidate onSubmit={handleSubmit}>
         <div className="dialog__body entry-form__body">
           {errors.form ? (
@@ -619,7 +664,17 @@ function EntryFormDialog({
           ) : null}
           <fieldset className="entry-form__fields" disabled={saving}>
             <div className="form-field">
-              <label htmlFor="entry-title">标题</label>
+              <div className="entry-form__title-row">
+                <label htmlFor="entry-title">标题</label>
+                <button
+                  className="link-button entry-form__scrape-button"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setScrapeOpen(true)}
+                >
+                  从 TMDB 刮削
+                </button>
+              </div>
               <input
                 id="entry-title"
                 name="title"
@@ -922,7 +977,21 @@ function EntryFormDialog({
           </button>
         </div>
       </form>
-    </Dialog>
+      </Dialog>
+
+      {scrapeOpen ? (
+        <ScrapeDialog
+          initialTitle={values.title}
+          mediaType={values.mediaType}
+          settings={settings}
+          active={!settingsOpen}
+          fallbackFocusRef={fallbackFocusRef}
+          onClose={() => setScrapeOpen(false)}
+          onOpenSettings={onOpenSettings}
+          onSelect={applyScrapeCandidate}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1280,6 +1349,488 @@ function ImportMarkdownDialog({
   );
 }
 
+function SettingsDialog({
+  settings,
+  fallbackFocusRef,
+  onClose,
+  onSaved,
+}: {
+  settings: AppSettings;
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onSaved: (settings: AppSettings) => void;
+}) {
+  const [values, setValues] = useState<AppSettings>(() => ({ ...settings }));
+  const [errors, setErrors] = useState<
+    Partial<
+      Record<"tmdbApiKey" | "webdavUrl" | "webdavUsername" | "form", string>
+    >
+  >({});
+  const [saving, setSaving] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const savingRef = useRef(false);
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const webdavUrlRef = useRef<HTMLInputElement>(null);
+  const webdavUsernameRef = useRef<HTMLInputElement>(null);
+  const titleId = "settings-title";
+  const lastSyncedLabel = values.lastSyncedAt
+    ? updatedAtFormatter.format(new Date(values.lastSyncedAt))
+    : "尚未同步";
+
+  function changeValue<Field extends keyof AppSettings>(
+    field: Field,
+    value: AppSettings[Field],
+  ) {
+    setValues((current) => ({ ...current, [field]: value }));
+    setErrors((current) => ({ ...current, [field]: undefined, form: undefined }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (savingRef.current) {
+      return;
+    }
+
+    const nextErrors: typeof errors = {};
+    const webdavUrl = values.webdavUrl.trim();
+    if (webdavUrl && !/^https?:\/\//i.test(webdavUrl)) {
+      nextErrors.webdavUrl = "服务器地址必须以 http:// 或 https:// 开头。";
+    }
+    if (values.webdavEnabled && !webdavUrl) {
+      nextErrors.webdavUrl = "启用自动同步时请填写服务器地址。";
+    }
+    if (values.webdavEnabled && !values.webdavUsername.trim()) {
+      nextErrors.webdavUsername = "启用自动同步时请填写用户名。";
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
+      if (nextErrors.webdavUrl) {
+        webdavUrlRef.current?.focus();
+      } else if (nextErrors.webdavUsername) {
+        webdavUsernameRef.current?.focus();
+      }
+      return;
+    }
+
+    savingRef.current = true;
+    setSaving(true);
+    setErrors({});
+    try {
+      const saved = await saveSettings(values);
+      onSaved(saved);
+    } catch (error) {
+      setErrors({
+        form: getWriteErrorMessage(error, "保存设置失败，请重试。"),
+      });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog
+      title="设置"
+      titleId={titleId}
+      busy={saving}
+      initialFocusRef={apiKeyRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--settings"
+    >
+      <form className="settings-form" noValidate onSubmit={handleSubmit}>
+        <div className="dialog__body settings-form__body">
+          {errors.form ? (
+            <p className="form-error" role="alert">
+              {errors.form}
+            </p>
+          ) : null}
+
+          <section className="settings-section" aria-labelledby="settings-tmdb-heading">
+            <div className="settings-section__heading">
+              <h3 id="settings-tmdb-heading">TMDB 元数据</h3>
+              <p>用于在添加或编辑条目时刮削标题、封面、评分与简介。</p>
+            </div>
+            <div className="settings-section__fields">
+              <div className="form-field">
+                <label htmlFor="settings-tmdb-api-key">TMDB API Key</label>
+                <div className="password-field">
+                  <input
+                    id="settings-tmdb-api-key"
+                    type={showApiKey ? "text" : "password"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={200}
+                    value={values.tmdbApiKey}
+                    aria-invalid={errors.tmdbApiKey ? true : undefined}
+                    aria-describedby="settings-tmdb-api-key-hint"
+                    ref={apiKeyRef}
+                    onChange={(event) =>
+                      changeValue("tmdbApiKey", event.target.value)
+                    }
+                  />
+                  <button
+                    className="secondary-button password-field__toggle"
+                    type="button"
+                    aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                    onClick={() => setShowApiKey((current) => !current)}
+                  >
+                    {showApiKey ? "隐藏" : "显示"}
+                  </button>
+                </div>
+                <p className="field-hint" id="settings-tmdb-api-key-hint">
+                  在 themoviedb.org 免费申请，保存后立即生效。
+                </p>
+                {errors.tmdbApiKey ? (
+                  <p className="field-error">{errors.tmdbApiKey}</p>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-section" aria-labelledby="settings-webdav-heading">
+            <div className="settings-section__heading">
+              <h3 id="settings-webdav-heading">WebDAV 同步</h3>
+              <p>用于在不同设备之间备份内容库，后续版本会启用自动同步。</p>
+            </div>
+            <div className="settings-section__fields">
+              <div className="form-field">
+                <label htmlFor="settings-webdav-url">服务器地址</label>
+                <input
+                  id="settings-webdav-url"
+                  type="url"
+                  inputMode="url"
+                  maxLength={500}
+                  placeholder="https://dav.example.com/catchup"
+                  value={values.webdavUrl}
+                  aria-invalid={errors.webdavUrl ? true : undefined}
+                  aria-describedby={
+                    errors.webdavUrl ? "settings-webdav-url-error" : undefined
+                  }
+                  ref={webdavUrlRef}
+                  onChange={(event) =>
+                    changeValue("webdavUrl", event.target.value)
+                  }
+                />
+                {errors.webdavUrl ? (
+                  <p className="field-error" id="settings-webdav-url-error">
+                    {errors.webdavUrl}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="settings-section__row">
+                <div className="form-field">
+                  <label htmlFor="settings-webdav-username">用户名</label>
+                  <input
+                    id="settings-webdav-username"
+                    type="text"
+                    autoComplete="username"
+                    maxLength={200}
+                    value={values.webdavUsername}
+                    aria-invalid={
+                      errors.webdavUsername ? true : undefined
+                    }
+                    aria-describedby={
+                      errors.webdavUsername
+                        ? "settings-webdav-username-error"
+                        : undefined
+                    }
+                    ref={webdavUsernameRef}
+                    onChange={(event) =>
+                      changeValue("webdavUsername", event.target.value)
+                    }
+                  />
+                  {errors.webdavUsername ? (
+                    <p
+                      className="field-error"
+                      id="settings-webdav-username-error"
+                    >
+                      {errors.webdavUsername}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="form-field">
+                  <label htmlFor="settings-webdav-password">密码</label>
+                  <input
+                    id="settings-webdav-password"
+                    type="password"
+                    autoComplete="current-password"
+                    maxLength={500}
+                    value={values.webdavPassword}
+                    onChange={(event) =>
+                      changeValue("webdavPassword", event.target.value)
+                    }
+                  />
+                </div>
+              </div>
+
+              <label className="settings-checkbox" htmlFor="settings-webdav-enabled">
+                <input
+                  id="settings-webdav-enabled"
+                  type="checkbox"
+                  checked={values.webdavEnabled}
+                  onChange={(event) =>
+                    changeValue("webdavEnabled", event.target.checked)
+                  }
+                />
+                <span>启用 WebDAV 自动同步</span>
+              </label>
+
+              <div className="form-field">
+                <label htmlFor="settings-last-synced">上次同步</label>
+                <input
+                  id="settings-last-synced"
+                  type="text"
+                  readOnly
+                  value={lastSyncedLabel}
+                />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div className="dialog__actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={saving}
+            onClick={onClose}
+          >
+            取消
+          </button>
+          <button className="primary-button" type="submit" disabled={saving}>
+            {saving ? "保存中…" : "保存设置"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function ScrapeResultCard({
+  candidate,
+  onSelect,
+}: {
+  candidate: ScrapeCandidate;
+  onSelect: () => void;
+}) {
+  const [posterFailed, setPosterFailed] = useState(false);
+  const fallbackType: MediaType = candidate.kind === "movie" ? "movie" : "drama";
+
+  return (
+    <article className="scrape-result" aria-label={candidate.title}>
+      <span
+        className={`entry__tile scrape-result__poster${
+          candidate.posterUrl && !posterFailed ? " entry__tile--cover" : ` entry__tile--${fallbackType}`
+        }`}
+        aria-hidden="true"
+      >
+        {candidate.posterUrl && !posterFailed ? (
+          <img
+            className="entry__cover"
+            src={candidate.posterUrl}
+            alt=""
+            loading="lazy"
+            onError={() => setPosterFailed(true)}
+          />
+        ) : (
+          <MediaTypeIcon type={fallbackType} />
+        )}
+      </span>
+
+      <div className="scrape-result__body">
+        <div className="scrape-result__title-row">
+          <h3>{candidate.title}</h3>
+          {candidate.rating !== null ? (
+            <span className="scrape-result__rating">
+              评分 {candidate.rating.toFixed(1)}
+            </span>
+          ) : null}
+        </div>
+        <p className="scrape-result__meta">
+          {candidate.originalTitle && candidate.originalTitle !== candidate.title
+            ? candidate.originalTitle
+            : null}
+          {candidate.originalTitle &&
+          candidate.originalTitle !== candidate.title &&
+          candidate.year
+            ? " · "
+            : null}
+          {candidate.year ? `${candidate.year} 年` : null}
+          {!candidate.originalTitle &&
+          !candidate.year &&
+          !candidate.overview
+            ? "暂无更多信息"
+            : null}
+        </p>
+        {candidate.overview ? (
+          <p className="scrape-result__overview">{candidate.overview}</p>
+        ) : null}
+        <button
+          className="secondary-button scrape-result__use"
+          type="button"
+          onClick={onSelect}
+        >
+          使用此结果
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ScrapeDialog({
+  initialTitle,
+  mediaType,
+  settings,
+  active,
+  fallbackFocusRef,
+  onClose,
+  onOpenSettings,
+  onSelect,
+}: {
+  initialTitle: string;
+  mediaType: MediaType;
+  settings: AppSettings;
+  active: boolean;
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onSelect: (candidate: ScrapeCandidate) => void;
+}) {
+  const [query, setQuery] = useState(initialTitle);
+  const [results, setResults] = useState<ScrapeCandidate[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const searchingRef = useRef(false);
+  const queryRef = useRef<HTMLInputElement>(null);
+  const titleId = "scrape-tmdb-title";
+  const missingApiKey = !settings.tmdbApiKey.trim();
+  const novelUnsupported = mediaType === "novel";
+  const visibleError = missingApiKey
+    ? "请先在设置中填写 TMDB API Key"
+    : novelUnsupported
+      ? "小说暂不支持 TMDB 刮削"
+      : error;
+  const canSearch = !searching && !missingApiKey && !novelUnsupported;
+
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (searchingRef.current) {
+      return;
+    }
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setResults([]);
+      setSearched(false);
+      setError("请输入要搜索的标题");
+      queryRef.current?.focus();
+      return;
+    }
+
+    searchingRef.current = true;
+    setSearching(true);
+    setError(null);
+    setSearched(false);
+    try {
+      const candidates = await searchTmdb(trimmed, mediaType);
+      setResults(candidates);
+      setSearched(true);
+    } catch (searchError) {
+      setResults([]);
+      setError(getWriteErrorMessage(searchError, "搜索 TMDB 失败，请重试。"));
+    } finally {
+      searchingRef.current = false;
+      setSearching(false);
+    }
+  }
+
+  return (
+    <Dialog
+      title="从 TMDB 刮削"
+      titleId={titleId}
+      active={active}
+      initialFocusRef={queryRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--scrape"
+    >
+      <form className="scrape-form" noValidate onSubmit={handleSearch}>
+        <div className="dialog__body">
+          <div className="scrape-search-row">
+            <div className="form-field">
+              <label htmlFor="scrape-tmdb-query">搜索标题</label>
+              <input
+                id="scrape-tmdb-query"
+                type="search"
+                value={query}
+                placeholder="输入电影或剧集名称"
+                ref={queryRef}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setError(null);
+                }}
+              />
+            </div>
+            <button
+              className="primary-button scrape-search-row__submit"
+              type="submit"
+              disabled={!canSearch}
+            >
+              {searching ? "搜索中…" : "搜索"}
+            </button>
+          </div>
+          <p className="field-hint">
+            {mediaType === "movie"
+              ? "按电影搜索，结果来自 TMDB。"
+              : "按剧集搜索，结果来自 TMDB。平台需要手动填写。"}
+          </p>
+
+          {visibleError ? (
+            <div className="scrape-error" role="alert">
+              <p>{visibleError}</p>
+              <button
+                className="link-button"
+                type="button"
+                onClick={onOpenSettings}
+              >
+                打开设置
+              </button>
+            </div>
+          ) : null}
+
+          {searching ? (
+            <p className="scrape-empty" role="status">
+              正在搜索 TMDB…
+            </p>
+          ) : results.length > 0 ? (
+            <ul className="scrape-results" aria-label="TMDB 搜索结果">
+              {results.map((candidate) => (
+                <li key={`${candidate.kind}-${candidate.sourceId}`}>
+                  <ScrapeResultCard
+                    candidate={candidate}
+                    onSelect={() => onSelect(candidate)}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : searched && !visibleError ? (
+            <p className="scrape-empty">没有找到匹配的结果，试试其他关键词。</p>
+          ) : null}
+        </div>
+
+        <div className="dialog__actions">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 function Sidebar({
   entries,
   view,
@@ -1290,6 +1841,7 @@ function Sidebar({
   onMediaTypeFilter,
   onOpenTrash,
   onImport,
+  onOpenSettings,
 }: {
   entries: MediaEntry[];
   view: AppView;
@@ -1300,6 +1852,7 @@ function Sidebar({
   onMediaTypeFilter: (type: MediaType | "all") => void;
   onOpenTrash: () => void;
   onImport: () => void;
+  onOpenSettings: () => void;
 }) {
   const counts = useMemo(() => {
     const byType = Object.fromEntries(
@@ -1412,6 +1965,18 @@ function Sidebar({
             <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
           </svg>
           <span>导入 Markdown</span>
+        </button>
+        <button
+          className="sidebar__import sidebar__settings"
+          type="button"
+          aria-label="设置"
+          onClick={onOpenSettings}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="2.6" />
+            <path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1" />
+          </svg>
+          <span>设置</span>
         </button>
         <div className="sidebar__db-status">
           <span className="sidebar__db-dot" aria-hidden="true" />
@@ -1714,6 +2279,11 @@ function App() {
   const [pendingPurge, setPendingPurge] = useState<MediaEntry | null>(null);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+  }));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [pendingEntryWrites, setPendingEntryWrites] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1746,7 +2316,8 @@ function App() {
     pendingDeletion !== null ||
     pendingPurge !== null ||
     emptyTrashOpen ||
-    importOpen;
+    importOpen ||
+    settingsOpen;
 
   function handleEntryUpdated(updatedEntry: MediaEntry) {
     setLibrary((current) => ({
@@ -1768,6 +2339,12 @@ function App() {
   function handleSaved(savedEntry: MediaEntry) {
     handleEntryUpdated(savedEntry);
     setEditor(null);
+  }
+
+  function handleSettingsSaved(saved: AppSettings) {
+    setSettings(saved);
+    setSettingsOpen(false);
+    setSettingsNotice("设置已保存");
   }
 
   async function handleEntryWrite(
@@ -1944,6 +2521,30 @@ function App() {
   }, [loadEntries, loadTrash]);
 
   useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((loaded) => {
+        if (!cancelled) {
+          setSettings(loaded);
+        }
+      })
+      .catch(() => {
+        // 设置读取失败时保持默认值，打开设置后可重新保存。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settingsNotice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setSettingsNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [settingsNotice]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const modifier = event.metaKey || event.ctrlKey;
       if (!modifier) {
@@ -2041,6 +2642,7 @@ function App() {
         }}
         onOpenTrash={() => setView("trash")}
         onImport={() => setImportOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="app-main">
@@ -2165,6 +2767,18 @@ function App() {
             >
               <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
                 <path d="M3.5 5.5h13M8 3h4M5.5 5.5 6.2 17h7.6l.7-11.5M8.3 8.5v5M11.7 8.5v5" />
+              </svg>
+            </button>
+
+            <button
+              className="icon-button topbar__settings-button"
+              type="button"
+              aria-label="设置"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="10" cy="10" r="2.6" />
+                <path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1" />
               </svg>
             </button>
 
@@ -2354,7 +2968,10 @@ function App() {
         <EntryFormDialog
           key={editor.mode === "edit" ? editor.entry.id : "create"}
           editor={editor}
+          settings={settings}
+          settingsOpen={settingsOpen}
           fallbackFocusRef={addButtonRef}
+          onOpenSettings={() => setSettingsOpen(true)}
           onClose={() => setEditor(null)}
           onSaved={handleSaved}
         />
@@ -2409,6 +3026,19 @@ function App() {
           onClose={() => setEmptyTrashOpen(false)}
           onConfirm={handleEmptyTrash}
         />
+      ) : null}
+      {settingsOpen ? (
+        <SettingsDialog
+          settings={settings}
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={handleSettingsSaved}
+        />
+      ) : null}
+      {settingsNotice ? (
+        <div className="app-toast" role="status">
+          {settingsNotice}
+        </div>
       ) : null}
     </div>
   );

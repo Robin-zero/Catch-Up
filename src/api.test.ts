@@ -6,15 +6,23 @@ import {
   deleteEntry,
   emptyTrash,
   getLibraryErrorMessage,
+  getSettings,
   importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
   restoreEntry,
+  saveSettings,
+  searchTmdb,
   setEntryStatus,
   updateEntry,
 } from "./api";
-import type { EntryInput, MediaEntry } from "./types";
+import {
+  DEFAULT_SETTINGS,
+  type EntryInput,
+  type MediaEntry,
+  type ScrapeCandidate,
+} from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -150,6 +158,54 @@ describe("Tauri 数据访问", () => {
 
     await expect(emptyTrash()).resolves.toBeUndefined();
     expect(mockedInvoke).toHaveBeenCalledWith("empty_trash");
+  });
+
+  it("通过 get_settings 读取设置", async () => {
+    const settings = { ...DEFAULT_SETTINGS, tmdbApiKey: "key" };
+    mockedInvoke.mockResolvedValue(settings);
+
+    await expect(getSettings()).resolves.toEqual(settings);
+    expect(mockedInvoke).toHaveBeenCalledWith("get_settings");
+  });
+
+  it("通过 save_settings 保存完整设置", async () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      tmdbApiKey: "key",
+      webdavUrl: "https://dav.example.com",
+      webdavUsername: "alice",
+    };
+    mockedInvoke.mockResolvedValue(settings);
+
+    await expect(saveSettings(settings)).resolves.toEqual(settings);
+    expect(mockedInvoke).toHaveBeenCalledWith("save_settings", { settings });
+  });
+
+  it("通过 search_tmdb 传递查询与媒体类型", async () => {
+    const candidate: ScrapeCandidate = {
+      sourceId: 1,
+      title: "沙丘 2",
+      originalTitle: "Dune: Part Two",
+      year: 2024,
+      posterUrl: "https://image.tmdb.org/t/p/w500/poster.jpg",
+      rating: 8.2,
+      overview: "简介",
+      kind: "movie",
+    };
+    mockedInvoke.mockResolvedValue([candidate]);
+
+    await expect(searchTmdb("沙丘", "movie")).resolves.toEqual([candidate]);
+    expect(mockedInvoke).toHaveBeenCalledWith("search_tmdb", {
+      query: "沙丘",
+      mediaType: "movie",
+    });
+
+    mockedInvoke.mockClear();
+    await searchTmdb("漫长的季节");
+    expect(mockedInvoke).toHaveBeenCalledWith("search_tmdb", {
+      query: "漫长的季节",
+      mediaType: null,
+    });
   });
 });
 

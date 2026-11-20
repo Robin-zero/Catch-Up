@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppSettings,
   EntryInput,
   EntryStatus,
   ImportReport,
   MediaEntry,
   MediaType,
+  ScrapeCandidate,
 } from "./types";
 
 export function listEntries(): Promise<MediaEntry[]> {
@@ -58,6 +60,24 @@ export function purgeEntry(id: string): Promise<void> {
 
 export function emptyTrash(): Promise<void> {
   return invoke<void>("empty_trash");
+}
+
+export function getSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>("get_settings");
+}
+
+export function saveSettings(settings: AppSettings): Promise<AppSettings> {
+  return invoke<AppSettings>("save_settings", { settings });
+}
+
+export function searchTmdb(
+  query: string,
+  mediaType?: MediaType,
+): Promise<ScrapeCandidate[]> {
+  return invoke<ScrapeCandidate[]>("search_tmdb", {
+    query,
+    mediaType: mediaType ?? null,
+  });
 }
 
 export function getLibraryErrorMessage(error: unknown): string {

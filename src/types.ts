@@ -31,6 +31,35 @@ export interface ImportReport {
   entries: MediaEntry[];
 }
 
+export interface AppSettings {
+  tmdbApiKey: string;
+  webdavUrl: string;
+  webdavUsername: string;
+  webdavPassword: string;
+  webdavEnabled: boolean;
+  lastSyncedAt: string | null;
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  tmdbApiKey: "",
+  webdavUrl: "",
+  webdavUsername: "",
+  webdavPassword: "",
+  webdavEnabled: false,
+  lastSyncedAt: null,
+};
+
+export interface ScrapeCandidate {
+  sourceId: number;
+  title: string;
+  originalTitle: string | null;
+  year: number | null;
+  posterUrl: string | null;
+  rating: number | null;
+  overview: string | null;
+  kind: "movie" | "tv";
+}
+
 export interface EntryInput {
   title: string;
   mediaType: MediaType;

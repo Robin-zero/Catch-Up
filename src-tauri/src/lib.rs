@@ -1,7 +1,11 @@
 pub mod database;
+pub mod settings;
+pub mod tmdb;
 
 use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
+use settings::AppSettings;
 use tauri::{Manager, State};
+use tmdb::ScrapeCandidate;
 
 #[tauri::command]
 fn list_entries(database: State<'_, Database>) -> Result<Vec<MediaEntry>, String> {
@@ -72,6 +76,30 @@ fn purge_entry(database: State<'_, Database>, id: String) -> Result<(), String> 
 #[tauri::command]
 fn empty_trash(database: State<'_, Database>) -> Result<(), String> {
     database.empty_trash()
+}
+
+#[tauri::command]
+fn get_settings(database: State<'_, Database>) -> Result<AppSettings, String> {
+    database.get_settings()
+}
+
+#[tauri::command]
+fn save_settings(
+    database: State<'_, Database>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    database.save_settings(settings)
+}
+
+#[tauri::command]
+async fn search_tmdb(
+    database: State<'_, Database>,
+    query: String,
+    media_type: Option<MediaType>,
+) -> Result<Vec<ScrapeCandidate>, String> {
+    // 先读取并释放数据库锁，再发起网络请求，避免 MutexGuard 跨 await。
+    let settings = database.get_settings()?;
+    tmdb::search_tmdb(&settings, &query, media_type).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -150,6 +178,9 @@ pub fn run() {
             restore_entry,
             purge_entry,
             empty_trash,
+            get_settings,
+            save_settings,
+            search_tmdb,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CatchUp");

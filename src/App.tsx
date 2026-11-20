@@ -30,12 +30,14 @@ import {
 import {
   DEFAULT_SETTINGS,
   ENTRY_STATUS_LABELS,
+  LAYOUT_LABELS,
   MEDIA_TYPE_LABELS,
   MEDIA_TYPE_UNITS,
   PLATFORM_PRESETS,
   type AppSettings,
   type EntryInput,
   type ImportReport,
+  type LibraryView,
   type MediaEntry,
   type MediaType,
   type ScrapeCandidate,
@@ -2509,6 +2511,23 @@ function App() {
     }
   }
 
+  async function handleLibraryViewChange(nextView: LibraryView) {
+    const previous = settingsRef.current;
+    if (previous.libraryView === nextView) {
+      return;
+    }
+    setSettings((current) => ({ ...current, libraryView: nextView }));
+    try {
+      const saved = await saveSettings({ ...previous, libraryView: nextView });
+      setSettings(saved);
+    } catch {
+      setSettings((current) => ({
+        ...current,
+        libraryView: previous.libraryView,
+      }));
+    }
+  }
+
   async function handleEntryWrite(
     entry: MediaEntry,
     action: EntryWriteAction,
@@ -2994,6 +3013,26 @@ function App() {
                     </option>
                   ))}
                 </select>
+
+                <div
+                  className="layout-toggle"
+                  role="group"
+                  aria-label="内容库布局"
+                >
+                  {(Object.keys(LAYOUT_LABELS) as LibraryView[]).map(
+                    (viewKey) => (
+                      <button
+                        key={viewKey}
+                        className="layout-toggle__option"
+                        type="button"
+                        aria-pressed={settings.libraryView === viewKey}
+                        onClick={() => handleLibraryViewChange(viewKey)}
+                      >
+                        {LAYOUT_LABELS[viewKey]}
+                      </button>
+                    ),
+                  )}
+                </div>
               </>
             ) : null}
 
@@ -3150,7 +3189,12 @@ function App() {
               ) : library.entries.length === 0 ? (
                 <EmptyState onAdd={() => setEditor({ mode: "create" })} />
               ) : visibleEntries.length > 0 ? (
-                <ul className="entry-list" aria-label="追更内容列表">
+                <ul
+                  className={`entry-list${
+                    settings.libraryView === "grid" ? " entry-list--grid" : ""
+                  }`}
+                  aria-label="追更内容列表"
+                >
                   {visibleEntries.map((entry) => (
                     <EntryRow
                       entry={entry}

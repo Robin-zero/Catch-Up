@@ -2030,6 +2030,7 @@ describe("设置中心", () => {
       webdavPassword: "secret",
       webdavEnabled: true,
       lastSyncedAt: "2026-11-01T08:00:00.000Z",
+      libraryView: "grid",
     });
     const user = userEvent.setup();
     await renderApp();

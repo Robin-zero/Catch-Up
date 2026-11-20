@@ -15,6 +15,8 @@ pub struct AppSettings {
     pub webdav_password: String,
     pub webdav_enabled: bool,
     pub last_synced_at: Option<String>,
+    /// 内容库布局：list / grid。
+    pub library_view: String,
 }
 
 impl AppSettings {
@@ -66,6 +68,8 @@ impl AppSettings {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
 
+        let library_view = normalize_library_view(&self.library_view);
+
         Ok(Self {
             tmdb_api_key,
             webdav_url,
@@ -73,6 +77,14 @@ impl AppSettings {
             webdav_password: self.webdav_password,
             webdav_enabled: self.webdav_enabled,
             last_synced_at,
+            library_view,
         })
+    }
+}
+
+pub(crate) fn normalize_library_view(raw: &str) -> String {
+    match raw.trim() {
+        "grid" => "grid".to_owned(),
+        _ => "list".to_owned(),
     }
 }

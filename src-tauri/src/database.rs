@@ -11,7 +11,7 @@ use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, Transact
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::settings::AppSettings;
+use crate::settings::{normalize_library_view, AppSettings};
 
 const DATABASE_VERSION: u32 = 5;
 const TRASH_RETENTION_DAYS: i64 = 30;
@@ -1429,6 +1429,7 @@ impl Database {
                 .get("last_synced_at")
                 .filter(|value| !value.trim().is_empty())
                 .cloned(),
+            library_view: normalize_library_view(&text("library_view")),
         })
     }
 
@@ -1447,6 +1448,7 @@ impl Database {
             ("webdav_password", settings.webdav_password.as_str()),
             ("webdav_enabled", webdav_enabled),
             ("last_synced_at", last_synced_at),
+            ("library_view", settings.library_view.as_str()),
         ];
 
         let mut connection = self.lock()?;
@@ -3157,7 +3159,15 @@ mod tests {
     fn settings_default_to_empty_values_when_not_configured() {
         let (_directory, database) = test_database();
 
-        assert_eq!(database.get_settings().unwrap(), AppSettings::default());
+        let settings = database.get_settings().unwrap();
+
+        assert_eq!(settings.tmdb_api_key, "");
+        assert_eq!(settings.webdav_url, "");
+        assert_eq!(settings.webdav_username, "");
+        assert_eq!(settings.webdav_password, "");
+        assert!(!settings.webdav_enabled);
+        assert_eq!(settings.last_synced_at, None);
+        assert_eq!(settings.library_view, "list");
     }
 
     #[test]
@@ -3174,6 +3184,7 @@ mod tests {
                     webdav_password: " secret ".to_owned(),
                     webdav_enabled: true,
                     last_synced_at: Some(" 2026-11-20T00:00:00.000Z ".to_owned()),
+                    library_view: "grid".to_owned(),
                 })
                 .unwrap()
         };
@@ -3186,6 +3197,7 @@ mod tests {
             saved.last_synced_at.as_deref(),
             Some("2026-11-20T00:00:00.000Z")
         );
+        assert_eq!(saved.library_view, "grid");
 
         let reopened = Database::open(&path).unwrap();
         assert_eq!(reopened.get_settings().unwrap(), saved);
@@ -3297,7 +3309,11 @@ mod tests {
         }
 
         let database = Database::open(&path).unwrap();
-        assert_eq!(database.get_settings().unwrap(), AppSettings::default());
+        let expected_defaults = AppSettings {
+            library_view: "list".to_owned(),
+            ..AppSettings::default()
+        };
+        assert_eq!(database.get_settings().unwrap(), expected_defaults);
         let entries = database.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "v2-entry");

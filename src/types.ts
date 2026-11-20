@@ -8,6 +8,9 @@ export type MediaType =
 
 export type EntryStatus = "tracking" | "completed" | "dropped" | "to_watch";
 
+
+export type LibraryView = "list" | "grid";
+
 export interface MediaEntry {
   id: string;
   title: string;
@@ -45,6 +48,7 @@ export interface AppSettings {
   webdavPassword: string;
   webdavEnabled: boolean;
   lastSyncedAt: string | null;
+  libraryView: LibraryView;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -54,6 +58,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webdavPassword: "",
   webdavEnabled: false,
   lastSyncedAt: null,
+  libraryView: "list",
 };
 
 export interface ScrapeCandidate {
@@ -103,6 +108,12 @@ export const ENTRY_STATUS_LABELS: Record<EntryStatus, string> = {
   completed: "已完成",
   dropped: "已弃剧",
   to_watch: "待看",
+};
+
+
+export const LAYOUT_LABELS: Record<LibraryView, string> = {
+  list: "列表",
+  grid: "网格",
 };
 
 export const PLATFORM_PRESETS = [

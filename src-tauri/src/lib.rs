@@ -1,6 +1,6 @@
 pub mod database;
 
-use database::{Database, EntryInput, EntryStatus, MediaEntry};
+use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
 use tauri::{Manager, State};
 
 #[tauri::command]
@@ -11,6 +11,15 @@ fn list_entries(database: State<'_, Database>) -> Result<Vec<MediaEntry>, String
 #[tauri::command]
 fn create_entry(database: State<'_, Database>, input: EntryInput) -> Result<MediaEntry, String> {
     database.create_entry(input)
+}
+
+#[tauri::command]
+fn import_markdown(
+    database: State<'_, Database>,
+    markdown: String,
+    default_media_type: Option<MediaType>,
+) -> Result<ImportReport, String> {
+    database.import_markdown(&markdown, default_media_type)
 }
 
 #[tauri::command]
@@ -132,6 +141,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_entries,
             create_entry,
+            import_markdown,
             update_entry,
             delete_entry,
             adjust_progress,

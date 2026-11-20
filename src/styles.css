@@ -281,11 +281,55 @@ svg {
 
 .sidebar__footer {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 9px 2px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 7px 2px 0;
   border-top: 1px solid var(--line);
   margin-top: 8px;
+}
+
+.sidebar__import {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.sidebar__import svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.72;
+}
+
+.sidebar__import:hover {
+  background: rgba(28, 29, 26, 0.055);
+  color: var(--text);
+}
+
+.sidebar__import:hover svg {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.sidebar__db-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px 2px;
   font-size: 10.5px;
   color: var(--text-tertiary);
 }
@@ -437,7 +481,8 @@ svg {
   gap: 6px;
 }
 
-.topbar__trash-button {
+.topbar__trash-button,
+.topbar__import-button {
   display: none;
 }
 
@@ -1351,6 +1396,115 @@ kbd {
   color: var(--danger);
 }
 
+/* ---------- Markdown import ---------- */
+
+.dialog--import {
+  width: min(580px, 100%);
+  max-height: min(90dvh, 720px);
+}
+
+.import-form {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.import-form__fields {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.import-form__fields:disabled {
+  opacity: 0.68;
+}
+
+.import-help {
+  margin-bottom: 12px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.import-help p + p {
+  margin-top: 4px;
+}
+
+.import-help code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.import-help__hint {
+  color: var(--text-tertiary);
+}
+
+.import-example {
+  margin: 5px 0 2px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
+.form-field .import-textarea {
+  min-height: 178px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  line-height: 1.55;
+}
+
+.form-field input[type="file"] {
+  height: auto;
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.import-report {
+  margin-top: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.import-report__summary {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.import-report__label {
+  margin-top: 6px;
+  color: var(--text-secondary);
+}
+
+.import-report__errors {
+  max-height: 124px;
+  margin: 4px 0 0;
+  padding-left: 17px;
+  overflow-y: auto;
+  color: var(--danger);
+}
+
+.import-report__errors li + li {
+  margin-top: 2px;
+}
+
 .form-error {
   margin-bottom: 10px;
   padding: 7px 9px;
@@ -1454,7 +1608,8 @@ kbd {
     height: 18px;
   }
 
-  .topbar__trash-button {
+  .topbar__trash-button,
+  .topbar__import-button {
     display: inline-flex;
     width: 34px;
     height: 34px;
@@ -1462,9 +1617,34 @@ kbd {
     background: var(--surface-muted);
   }
 
-  .topbar__trash-button svg {
+  .topbar__trash-button svg,
+  .topbar__import-button svg {
     width: 18px;
     height: 18px;
+  }
+
+  .dialog--import {
+    max-height: 92dvh;
+  }
+
+  .dialog--import .dialog__body {
+    padding: 13px 13px 11px;
+  }
+
+  .import-help {
+    font-size: 12px;
+  }
+
+  .import-help code {
+    font-size: 11.5px;
+  }
+
+  .form-field .import-textarea {
+    min-height: 138px;
+  }
+
+  .import-report__errors {
+    max-height: 104px;
   }
 
   .trash-toolbar {

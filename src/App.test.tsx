@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +13,7 @@ import {
   createEntry,
   deleteEntry,
   emptyTrash,
+  importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
@@ -14,7 +22,7 @@ import {
   updateEntry,
 } from "./api";
 import App from "./App";
-import type { MediaEntry, MediaType } from "./types";
+import type { ImportReport, MediaEntry, MediaType } from "./types";
 
 vi.mock("./api", () => ({
   listEntries: vi.fn(),
@@ -25,6 +33,7 @@ vi.mock("./api", () => ({
   restoreEntry: vi.fn(),
   purgeEntry: vi.fn(),
   emptyTrash: vi.fn(),
+  importMarkdown: vi.fn(),
   adjustProgress: vi.fn(),
   setEntryStatus: vi.fn(),
   getLibraryErrorMessage: vi.fn(
@@ -40,6 +49,7 @@ const mockedDeleteEntry = vi.mocked(deleteEntry);
 const mockedRestoreEntry = vi.mocked(restoreEntry);
 const mockedPurgeEntry = vi.mocked(purgeEntry);
 const mockedEmptyTrash = vi.mocked(emptyTrash);
+const mockedImportMarkdown = vi.mocked(importMarkdown);
 const mockedAdjustProgress = vi.mocked(adjustProgress);
 const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 
@@ -75,6 +85,7 @@ beforeEach(() => {
   mockedRestoreEntry.mockReset();
   mockedPurgeEntry.mockReset();
   mockedEmptyTrash.mockReset();
+  mockedImportMarkdown.mockReset();
   mockedAdjustProgress.mockReset();
   mockedSetEntryStatus.mockReset();
 });
@@ -1733,5 +1744,202 @@ describe("短剧与条目元数据", () => {
       coverUrl: null,
       overview: null,
     });
+  });
+});
+
+describe("Markdown 清单导入", () => {
+  async function openImportDialog() {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: "导入 Markdown" }),
+    );
+    return {
+      user,
+      dialog: screen.getByRole("dialog", { name: "导入 Markdown" }),
+    };
+  }
+
+  it("从侧边栏打开导入对话框，展示两种格式示例与默认剧集", async () => {
+    const { dialog } = await openImportDialog();
+
+    const textarea = within(dialog).getByLabelText("Markdown 内容");
+    expect(textarea).toHaveFocus();
+    expect(within(dialog).getByLabelText("默认类型")).toHaveValue("drama");
+    expect(within(dialog).getByLabelText("从本地文件读取")).toHaveAttribute(
+      "accept",
+      ".md,.markdown,text/markdown,text/plain",
+    );
+    expect(within(dialog).getByText(/标题 \| 类型 \| 第N季/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/自动识别季、进度、平台和评分/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "开始导入" }),
+    ).toBeVisible();
+
+    const mobileButton = screen
+      .getAllByRole("button", { name: "导入 Markdown" })
+      .find((button) => button.classList.contains("topbar__import-button"));
+    expect(mobileButton).toBeDefined();
+  });
+
+  it("提交时调用 import_markdown 并传递 Markdown 与默认类型", async () => {
+    const { user, dialog } = await openImportDialog();
+    const markdown =
+      "庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6";
+    mockedImportMarkdown.mockResolvedValue({
+      imported: 1,
+      skipped: 0,
+      errors: [],
+      entries: [makeEntry({ id: "imported", title: "庆余年" })],
+    });
+
+    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
+      target: { value: markdown },
+    });
+    await user.selectOptions(within(dialog).getByLabelText("默认类型"), "anime");
+    await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
+
+    expect(
+      await within(dialog).findByText(/成功导入 1 条，跳过 0 条/),
+    ).toBeInTheDocument();
+    expect(mockedImportMarkdown).toHaveBeenCalledWith(markdown, "anime");
+  });
+
+  it("展示成功、跳过数量与逐条错误信息", async () => {
+    const { user, dialog } = await openImportDialog();
+    mockedImportMarkdown.mockResolvedValue({
+      imported: 2,
+      skipped: 1,
+      errors: ["第 3 行：评分必须在 0 到 10 之间。"],
+      entries: [
+        makeEntry({ id: "a", title: "第一条" }),
+        makeEntry({ id: "b", title: "第二条" }),
+      ],
+    });
+
+    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
+      target: { value: "- 第一条\n- 第二条\n- 第三条 11分" },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
+
+    const status = await within(dialog).findByRole("status");
+    expect(status).toHaveTextContent("成功导入 2 条，跳过 1 条。");
+    const errors = within(dialog).getByRole("list", { name: "导入错误" });
+    expect(within(errors).getAllByRole("listitem")).toHaveLength(1);
+    expect(
+      within(errors).getByText("第 3 行：评分必须在 0 到 10 之间。"),
+    ).toBeInTheDocument();
+  });
+
+  it("导入成功后刷新主库并保持当前筛选", async () => {
+    const importedEntry = makeEntry({
+      id: "imported-refresh",
+      title: "刚导入的剧",
+      mediaType: "anime",
+    });
+    mockedListEntries
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([importedEntry]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "anime");
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(
+      within(sidebar).getByRole("button", { name: "导入 Markdown" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "导入 Markdown" });
+    mockedImportMarkdown.mockResolvedValue({
+      imported: 1,
+      skipped: 0,
+      errors: [],
+      entries: [importedEntry],
+    });
+
+    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
+      target: { value: "- 刚导入的剧 番剧" },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
+
+    expect(
+      await screen.findByRole("article", { name: "刚导入的剧" }),
+    ).toBeInTheDocument();
+    expect(mockedListEntries).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("类型筛选")).toHaveValue("anime");
+
+    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog", { name: "导入 Markdown" })).toBeNull();
+    expect(
+      screen.getByRole("article", { name: "刚导入的剧" }),
+    ).toBeInTheDocument();
+  });
+
+  it("导入失败时显示提示、保留输入且不关闭对话框", async () => {
+    const { user, dialog } = await openImportDialog();
+    const markdown = "- 保留这一行";
+    mockedImportMarkdown.mockRejectedValue(new Error("backend unavailable"));
+
+    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
+      target: { value: markdown },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "backend unavailable",
+    );
+    expect(within(dialog).getByLabelText("Markdown 内容")).toHaveValue(
+      markdown,
+    );
+    expect(
+      screen.getByRole("dialog", { name: "导入 Markdown" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "开始导入" }),
+    ).toBeEnabled();
+  });
+
+  it("导入中禁用重复提交，完成后恢复操作", async () => {
+    const { user, dialog } = await openImportDialog();
+    const deferred = createDeferred<ImportReport>();
+    mockedImportMarkdown.mockReturnValue(deferred.promise);
+
+    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
+      target: { value: "- 慢速导入" },
+    });
+    const submit = within(dialog).getByRole("button", { name: "开始导入" });
+    await user.click(submit);
+
+    expect(submit).toBeDisabled();
+    expect(within(dialog).getByLabelText("Markdown 内容")).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "导入中…" }),
+    ).toBeDisabled();
+    await user.click(
+      within(dialog).getByRole("button", { name: "导入中…" }),
+    );
+    expect(mockedImportMarkdown).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      deferred.resolve({
+        imported: 1,
+        skipped: 0,
+        errors: [],
+        entries: [makeEntry({ id: "slow", title: "慢速导入" })],
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "开始导入" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      within(dialog).getByText(/成功导入 1 条，跳过 0 条/),
+    ).toBeInTheDocument();
   });
 });

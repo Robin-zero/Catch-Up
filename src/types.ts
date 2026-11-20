@@ -24,6 +24,13 @@ export interface MediaEntry {
   updatedAt: string;
 }
 
+export interface ImportReport {
+  imported: number;
+  skipped: number;
+  errors: string[];
+  entries: MediaEntry[];
+}
+
 export interface EntryInput {
   title: string;
   mediaType: MediaType;

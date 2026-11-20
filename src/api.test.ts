@@ -6,6 +6,7 @@ import {
   deleteEntry,
   emptyTrash,
   getLibraryErrorMessage,
+  importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
@@ -57,6 +58,24 @@ describe("Tauri 数据访问", () => {
 
     await expect(createEntry(input)).resolves.toEqual(entry);
     expect(mockedInvoke).toHaveBeenCalledWith("create_entry", { input });
+  });
+
+  it("通过 import_markdown 传递 Markdown 与默认类型", async () => {
+    const report = {
+      imported: 1,
+      skipped: 0,
+      errors: [],
+      entries: [entry],
+    };
+    mockedInvoke.mockResolvedValue(report);
+
+    await expect(importMarkdown("- 测试条目", "anime")).resolves.toEqual(
+      report,
+    );
+    expect(mockedInvoke).toHaveBeenCalledWith("import_markdown", {
+      markdown: "- 测试条目",
+      defaultMediaType: "anime",
+    });
   });
 
   it("通过 update_entry 传递条目 id 和完整输入", async () => {

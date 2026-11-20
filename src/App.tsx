@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type ReactNode,
   type RefObject,
@@ -14,6 +15,7 @@ import {
   deleteEntry,
   emptyTrash,
   getLibraryErrorMessage,
+  importMarkdown,
   listEntries,
   listTrash,
   purgeEntry,
@@ -27,6 +29,7 @@ import {
   MEDIA_TYPE_UNITS,
   PLATFORM_PRESETS,
   type EntryInput,
+  type ImportReport,
   type MediaEntry,
   type MediaType,
 } from "./types";
@@ -1091,6 +1094,192 @@ function ConfirmActionDialog({
   );
 }
 
+function ImportMarkdownDialog({
+  fallbackFocusRef,
+  onClose,
+  onImported,
+}: {
+  fallbackFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [markdown, setMarkdown] = useState("");
+  const [defaultMediaType, setDefaultMediaType] = useState<MediaType>("drama");
+  const [report, setReport] = useState<ImportReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importingRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const titleId = "import-markdown-title";
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (importingRef.current) {
+      return;
+    }
+    if (!markdown.trim()) {
+      setReport(null);
+      setError("请先粘贴 Markdown 内容，或选择一个本地文件。");
+      textareaRef.current?.focus();
+      return;
+    }
+
+    importingRef.current = true;
+    setImporting(true);
+    setReport(null);
+    setError(null);
+    try {
+      const result = await importMarkdown(markdown, defaultMediaType);
+      setReport(result);
+      onImported();
+    } catch (importError) {
+      setError(getWriteErrorMessage(importError, "导入失败，请重试。"));
+    } finally {
+      importingRef.current = false;
+      setImporting(false);
+    }
+  }
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      setMarkdown(text);
+      setReport(null);
+      setError(null);
+      textareaRef.current?.focus();
+    } catch {
+      setError("读取本地文件失败，请重试。");
+    }
+  }
+
+  return (
+    <Dialog
+      title="导入 Markdown"
+      titleId={titleId}
+      busy={importing}
+      initialFocusRef={textareaRef}
+      fallbackFocusRef={fallbackFocusRef}
+      onClose={onClose}
+      className="dialog--import"
+    >
+      <form className="import-form" noValidate onSubmit={handleSubmit}>
+        <div className="dialog__body">
+          <div className="import-help">
+            <p>每行一个条目，支持两种格式：</p>
+            <p>
+              <strong>模板</strong>：{" "}
+              <code>标题 | 类型 | 第N季 | 当前/总 | 平台 | 评分</code>
+            </p>
+            <pre className="import-example">
+              {"庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6"}
+            </pre>
+            <p>
+              <strong>普通清单</strong>：直接粘贴列表，自动识别季、进度、平台和评分。
+            </p>
+            <pre className="import-example">
+              {"- 漫长的季节 3/12 腾讯视频 9.4分\n- 怪奇物语 第4季 3/9 Netflix 8.7分"}
+            </pre>
+            <p className="import-help__hint">空行与以 # 开头的行会被忽略。</p>
+          </div>
+
+          {error ? (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <fieldset className="import-form__fields" disabled={importing}>
+            <div className="form-field">
+              <label htmlFor="import-markdown-text">Markdown 内容</label>
+              <textarea
+                id="import-markdown-text"
+                className="import-textarea"
+                rows={9}
+                value={markdown}
+                placeholder={"粘贴 Markdown 清单，或从下方选择本地文件"}
+                ref={textareaRef}
+                onChange={(event) => {
+                  setMarkdown(event.target.value);
+                  setReport(null);
+                  setError(null);
+                }}
+              />
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="import-markdown-file">从本地文件读取</label>
+              <input
+                id="import-markdown-file"
+                type="file"
+                accept=".md,.markdown,text/markdown,text/plain"
+                onChange={(event) => {
+                  void handleFileChange(event);
+                }}
+              />
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="import-default-media-type">默认类型</label>
+              <select
+                id="import-default-media-type"
+                value={defaultMediaType}
+                onChange={(event) =>
+                  setDefaultMediaType(event.target.value as MediaType)
+                }
+              >
+                {MEDIA_TYPES.map((mediaType) => (
+                  <option key={mediaType} value={mediaType}>
+                    {MEDIA_TYPE_LABELS[mediaType]}
+                  </option>
+                ))}
+              </select>
+              <p className="field-hint">清单中未标明类型时使用</p>
+            </div>
+          </fieldset>
+
+          {report ? (
+            <div className="import-report" role="status">
+              <p className="import-report__summary">
+                成功导入 {report.imported} 条，跳过 {report.skipped} 条。
+              </p>
+              {report.errors.length > 0 ? (
+                <>
+                  <p className="import-report__label">未导入的行：</p>
+                  <ul className="import-report__errors" aria-label="导入错误">
+                    {report.errors.map((message, index) => (
+                      <li key={`${index}-${message}`}>{message}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="dialog__actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={importing}
+            onClick={onClose}
+          >
+            关闭
+          </button>
+          <button className="primary-button" type="submit" disabled={importing}>
+            {importing ? "导入中…" : "开始导入"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 function Sidebar({
   entries,
   view,
@@ -1100,6 +1289,7 @@ function Sidebar({
   onStatusFilter,
   onMediaTypeFilter,
   onOpenTrash,
+  onImport,
 }: {
   entries: MediaEntry[];
   view: AppView;
@@ -1109,6 +1299,7 @@ function Sidebar({
   onStatusFilter: (status: MediaEntry["status"] | "all") => void;
   onMediaTypeFilter: (type: MediaType | "all") => void;
   onOpenTrash: () => void;
+  onImport: () => void;
 }) {
   const counts = useMemo(() => {
     const byType = Object.fromEntries(
@@ -1211,8 +1402,21 @@ function Sidebar({
       </nav>
 
       <div className="sidebar__footer">
-        <span className="sidebar__db-dot" aria-hidden="true" />
-        <span>本地数据库 · 离线可用</span>
+        <button
+          className="sidebar__import"
+          type="button"
+          aria-label="导入 Markdown"
+          onClick={onImport}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
+          </svg>
+          <span>导入 Markdown</span>
+        </button>
+        <div className="sidebar__db-status">
+          <span className="sidebar__db-dot" aria-hidden="true" />
+          <span>本地数据库 · 离线可用</span>
+        </div>
       </div>
     </aside>
   );
@@ -1509,6 +1713,7 @@ function App() {
   );
   const [pendingPurge, setPendingPurge] = useState<MediaEntry | null>(null);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [pendingEntryWrites, setPendingEntryWrites] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1540,7 +1745,8 @@ function App() {
     editor !== null ||
     pendingDeletion !== null ||
     pendingPurge !== null ||
-    emptyTrashOpen;
+    emptyTrashOpen ||
+    importOpen;
 
   function handleEntryUpdated(updatedEntry: MediaEntry) {
     setLibrary((current) => ({
@@ -1834,6 +2040,7 @@ function App() {
           setMediaTypeFilter(type);
         }}
         onOpenTrash={() => setView("trash")}
+        onImport={() => setImportOpen(true)}
       />
 
       <div className="app-main">
@@ -1935,6 +2142,16 @@ function App() {
           </div>
 
           <div className="topbar__actions">
+            <button
+              className="icon-button topbar__import-button"
+              type="button"
+              aria-label="导入 Markdown"
+              onClick={() => setImportOpen(true)}
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
+              </svg>
+            </button>
             <button
               className="icon-button topbar__trash-button"
               type="button"
@@ -2169,6 +2386,15 @@ function App() {
           fallbackFocusRef={addButtonRef}
           onClose={() => setPendingPurge(null)}
           onConfirm={handlePurge}
+        />
+      ) : null}
+      {importOpen ? (
+        <ImportMarkdownDialog
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setImportOpen(false)}
+          onImported={() => {
+            void loadEntries();
+          }}
         />
       ) : null}
       {emptyTrashOpen ? (

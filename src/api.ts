@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EntryInput, EntryStatus, MediaEntry } from "./types";
+import type {
+  EntryInput,
+  EntryStatus,
+  ImportReport,
+  MediaEntry,
+  MediaType,
+} from "./types";
 
 export function listEntries(): Promise<MediaEntry[]> {
   return invoke<MediaEntry[]>("list_entries");
@@ -11,6 +17,16 @@ export function createEntry(input: EntryInput): Promise<MediaEntry> {
 
 export function updateEntry(id: string, input: EntryInput): Promise<MediaEntry> {
   return invoke<MediaEntry>("update_entry", { id, input });
+}
+
+export function importMarkdown(
+  markdown: string,
+  defaultMediaType: MediaType,
+): Promise<ImportReport> {
+  return invoke<ImportReport>("import_markdown", {
+    markdown,
+    defaultMediaType,
+  });
 }
 
 export function deleteEntry(id: string): Promise<void> {

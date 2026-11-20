@@ -2887,38 +2887,6 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-
-    async function subscribeToMenu() {
-      if (!("__TAURI_INTERNALS__" in window)) {
-        return;
-      }
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        const stop = await listen("catchup://new-entry", () => {
-          if (!dialogOpenRef.current) {
-            setEditor({ mode: "create" });
-          }
-        });
-        if (cancelled) {
-          stop();
-        } else {
-          unlisten = stop;
-        }
-      } catch {
-        // 浏览器预览或测试环境下没有 Tauri 事件系统，忽略即可。
-      }
-    }
-
-    void subscribeToMenu();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
   const isTrashView = view === "trash";
   const normalizedTitleQuery = titleQuery.trim().toLowerCase();
   const allEntries = library.status === "success" ? library.entries : [];

@@ -14,12 +14,14 @@
       {
         "label": "main",
         "title": "追更 · CatchUp",
-        "width": 1100,
-        "height": 720,
-        "minWidth": 360,
-        "minHeight": 560,
+        "width": 1180,
+        "height": 760,
+        "minWidth": 480,
+        "minHeight": 520,
+        "center": true,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "theme": "Light"
       }
     ],
     "security": {

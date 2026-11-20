@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -70,9 +71,12 @@ const MEDIA_TYPE_ICONS: Record<MediaType, ReactNode> = {
   ),
 };
 
-function BrandMark() {
+const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
+const ENTRY_STATUSES = ["tracking", "completed"] as const;
+
+function BrandMark({ size = 28 }: { size?: number }) {
   return (
-    <span className="brand-mark" aria-hidden="true">
+    <span className="brand-mark" aria-hidden="true" style={{ width: size, height: size }}>
       <svg viewBox="0 0 32 32" fill="none">
         <path d="M9 7.5h11.5A2.5 2.5 0 0 1 23 10v15H11.5A3.5 3.5 0 0 1 8 21.5V8.5" />
         <path d="M9 7.5v13a4 4 0 0 1 4-4h10M13 12h5" />
@@ -89,7 +93,7 @@ function MediaTypeIcon({ type }: { type: MediaType }) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.65"
+      strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -101,39 +105,40 @@ function MediaTypeIcon({ type }: { type: MediaType }) {
 
 function LoadingState() {
   return (
-    <div className="library-state" role="status" aria-live="polite">
-      <span className="loading-spinner" aria-hidden="true" />
-      <h3>正在整理你的内容库</h3>
-      <p>稍等片刻，把上次的故事进度找回来。</p>
+    <div className="content-state content-state--loading" role="status" aria-live="polite">
+      <div className="skeleton-list" aria-hidden="true">
+        {[0, 1, 2, 3].map((row) => (
+          <div className="skeleton-row" key={row}>
+            <span className="skeleton skeleton--tile" />
+            <span className="skeleton-lines">
+              <span className="skeleton skeleton--title" />
+              <span className="skeleton skeleton--meta" />
+            </span>
+            <span className="skeleton skeleton--bar" />
+          </div>
+        ))}
+      </div>
+      <p className="content-state__loading-text">正在整理你的内容库…</p>
     </div>
   );
 }
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="library-state library-state--empty">
-      <svg
-        className="empty-illustration"
-        viewBox="0 0 200 136"
-        fill="none"
-        aria-hidden="true"
-      >
-        <path d="M28 113h144" className="empty-illustration__shelf" />
-        <rect x="49" y="42" width="31" height="69" rx="4" />
-        <rect x="84" y="25" width="35" height="86" rx="4" />
-        <path d="m125 45 30-7 16 68-30 7-16-68Z" />
-        <path d="M91 36h20M91 43h14M56 53h16M57 98h15" />
-        <path d="m100 65 5 5 9-11" className="empty-illustration__check" />
-        <circle cx="159" cy="23" r="3" />
-        <path d="M36 28v10M31 33h10" />
-      </svg>
-      <p className="library-state__eyebrow">A FRESH START</p>
+    <div className="content-state content-state--empty">
+      <span className="content-state__icon" aria-hidden="true">
+        <svg viewBox="0 0 48 48" fill="none">
+          <path d="M10 36.5h28" className="empty-shelf" />
+          <rect x="13" y="14" width="9" height="22.5" rx="1.5" />
+          <rect x="24" y="9" width="9" height="27.5" rx="1.5" />
+          <path d="m35 15 5.5-1.6L44 35.5l-5.5 1.6L35 15Z" />
+          <path d="M16.5 20h2.5M16.5 24h2.5M27.5 15h2.5M27.5 19h2.5" />
+          <path d="m27.5 28 2 2 4-4.5" className="empty-check" />
+        </svg>
+      </span>
       <h3>内容库还是空的</h3>
       <p>好故事值得被记住。这里会安静地收下你的每一次追更。</p>
-      <button className="primary-button empty-state__add" type="button" onClick={onAdd}>
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="M10 4v12M4 10h12" />
-        </svg>
+      <button className="primary-button" type="button" onClick={onAdd}>
         添加第一个条目
       </button>
     </div>
@@ -142,8 +147,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 
 function NoResultsState({ onClear }: { onClear: () => void }) {
   return (
-    <div className="library-state library-state--no-results">
-      <span className="state-icon" aria-hidden="true">
+    <div className="content-state content-state--no-results">
+      <span className="content-state__icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none">
           <circle cx="10.5" cy="10.5" r="6.5" />
           <path d="m15.5 15.5 5 5M8 10.5h5" />
@@ -151,11 +156,7 @@ function NoResultsState({ onClear }: { onClear: () => void }) {
       </span>
       <h3>没有找到匹配的条目</h3>
       <p>试试其他关键词或筛选条件，完整内容库不会受影响。</p>
-      <button
-        className="secondary-button no-results__clear"
-        type="button"
-        onClick={onClear}
-      >
+      <button className="secondary-button" type="button" onClick={onClear}>
         清除搜索和筛选
       </button>
     </div>
@@ -170,8 +171,8 @@ function ErrorState({
   onRetry: () => void;
 }) {
   return (
-    <div className="library-state library-state--error" role="alert">
-      <span className="state-icon" aria-hidden="true">
+    <div className="content-state content-state--error" role="alert">
+      <span className="content-state__icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M12 8v5M12 16.5v.5" />
           <path d="M10.3 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
@@ -179,10 +180,7 @@ function ErrorState({
       </span>
       <h3>内容库读取失败</h3>
       <p>{message}</p>
-      <button className="retry-button" type="button" onClick={onRetry}>
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="M16 6V2.5M16 6h-3.5M15.6 5.9A7 7 0 1 0 17 11" />
-        </svg>
+      <button className="secondary-button" type="button" onClick={onRetry}>
         重新加载
       </button>
     </div>
@@ -294,6 +292,7 @@ function Dialog({
         aria-labelledby={titleId}
         ref={dialogRef}
       >
+        <span className="dialog__grabber" aria-hidden="true" />
         <div className="dialog__header">
           <h2 id={titleId}>{title}</h2>
           <button
@@ -329,9 +328,6 @@ interface EntryFormValues {
 
 type EntryField = "title" | "currentProgress" | "totalProgress";
 type EntryFormErrors = Partial<Record<EntryField | "form", string>>;
-
-const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
-const ENTRY_STATUSES = ["tracking", "completed"] as const;
 
 function getWriteErrorMessage(error: unknown, fallback: string): string {
   if (typeof error === "string" && error.trim()) {
@@ -477,11 +473,6 @@ function EntryFormDialog({
     >
       <form className="entry-form" noValidate onSubmit={handleSubmit}>
         <div className="dialog__body entry-form__body">
-          <p className="dialog__description">
-            {editingEntry
-              ? `更新《${editingEntry.title}》的类型、进度与状态。`
-              : "记下新的故事，从当前进度继续。"}
-          </p>
           {errors.form ? (
             <p className="form-error" role="alert">
               {errors.form}
@@ -496,6 +487,7 @@ function EntryFormDialog({
                 type="text"
                 value={values.title}
                 required
+                placeholder="例如：漫长的季节"
                 aria-invalid={errors.title ? true : undefined}
                 aria-describedby={errors.title ? "entry-title-error" : undefined}
                 ref={titleRef}
@@ -729,52 +721,132 @@ function DeleteEntryDialog({
   );
 }
 
-function LibrarySummary({ entries }: { entries: MediaEntry[] }) {
+function Sidebar({
+  entries,
+  statusFilter,
+  mediaTypeFilter,
+  onStatusFilter,
+  onMediaTypeFilter,
+}: {
+  entries: MediaEntry[];
+  statusFilter: MediaEntry["status"] | "all";
+  mediaTypeFilter: MediaType | "all";
+  onStatusFilter: (status: MediaEntry["status"] | "all") => void;
+  onMediaTypeFilter: (type: MediaType | "all") => void;
+}) {
+  const counts = useMemo(() => {
+    const byType = Object.fromEntries(
+      MEDIA_TYPES.map((type) => [type, 0]),
+    ) as Record<MediaType, number>;
+    let completed = 0;
+    for (const entry of entries) {
+      byType[entry.mediaType] += 1;
+      if (entry.status === "completed") {
+        completed += 1;
+      }
+    }
+    return { byType, completed, tracking: entries.length - completed };
+  }, [entries]);
+
+  return (
+    <aside className="sidebar" aria-label="侧边栏">
+      <div className="sidebar__brand">
+        <BrandMark size={26} />
+        <div className="sidebar__brand-text">
+          <strong>追更</strong>
+          <span>CatchUp</span>
+        </div>
+      </div>
+
+      <nav className="sidebar__nav" aria-label="内容库导航">
+        <p className="sidebar__section">内容库</p>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={statusFilter === "all"}
+          onClick={() => onStatusFilter("all")}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3.5 5.5h13M3.5 10h13M3.5 14.5h13" />
+          </svg>
+          <span className="sidebar__label">全部条目</span>
+          <span className="sidebar__count">{entries.length}</span>
+        </button>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={statusFilter === "tracking"}
+          onClick={() => onStatusFilter("tracking")}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="7" />
+            <path d="m8.5 7 4.5 3-4.5 3V7Z" />
+          </svg>
+          <span className="sidebar__label">正在追更</span>
+          <span className="sidebar__count">{counts.tracking}</span>
+        </button>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={statusFilter === "completed"}
+          onClick={() => onStatusFilter("completed")}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="7" />
+            <path d="m7 10 2.2 2.2L13.5 8" />
+          </svg>
+          <span className="sidebar__label">已看完</span>
+          <span className="sidebar__count">{counts.completed}</span>
+        </button>
+
+        <p className="sidebar__section">按类型</p>
+        {MEDIA_TYPES.map((type) => (
+          <button
+            className="sidebar__item"
+            type="button"
+            key={type}
+            aria-pressed={mediaTypeFilter === type}
+            onClick={() =>
+              onMediaTypeFilter(mediaTypeFilter === type ? "all" : type)
+            }
+          >
+            <span className={`sidebar__type-dot sidebar__type-dot--${type}`} aria-hidden="true" />
+            <span className="sidebar__label">{MEDIA_TYPE_LABELS[type]}</span>
+            <span className="sidebar__count">{counts.byType[type]}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="sidebar__footer">
+        <span className="sidebar__db-dot" aria-hidden="true" />
+        <span>本地数据库 · 离线可用</span>
+      </div>
+    </aside>
+  );
+}
+
+function SummaryStrip({ entries }: { entries: MediaEntry[] }) {
   const completedCount = entries.filter(
     (entry) => entry.status === "completed",
   ).length;
   const trackingCount = entries.length - completedCount;
 
   return (
-    <section className="library-summary" aria-label="内容库摘要">
-      <div className="summary-card">
-        <div className="summary-card__label">
-          <span>条目总数</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m12 3 9 5-9 5-9-5 9-5Z" />
-            <path d="m3 12 9 5 9-5M3 16l9 5 9-5" />
-          </svg>
-        </div>
-        <p className="summary-card__value">
-          <strong>{entries.length}</strong>
-          <span>项</span>
-        </p>
+    <section className="summary-strip" aria-label="内容库摘要">
+      <div className="summary-strip__item">
+        <span className="summary-strip__label">条目总数</span>
+        <strong className="summary-strip__value">{entries.length}</strong>
+        <span className="summary-strip__suffix">项</span>
       </div>
-      <div className="summary-card summary-card--tracking">
-        <div className="summary-card__label">
-          <span>正在追更</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="8.5" />
-            <path d="m10 8 6 4-6 4V8Z" />
-          </svg>
-        </div>
-        <p className="summary-card__value">
-          <strong>{trackingCount}</strong>
-          <span>项在追</span>
-        </p>
+      <div className="summary-strip__item summary-strip__item--tracking">
+        <span className="summary-strip__label">正在追更</span>
+        <strong className="summary-strip__value">{trackingCount}</strong>
+        <span className="summary-strip__suffix">项在追</span>
       </div>
-      <div className="summary-card summary-card--completed">
-        <div className="summary-card__label">
-          <span>已经看完</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="8.5" />
-            <path d="m8 12 2.7 2.7L16.5 9" />
-          </svg>
-        </div>
-        <p className="summary-card__value">
-          <strong>{completedCount}</strong>
-          <span>项完成</span>
-        </p>
+      <div className="summary-strip__item summary-strip__item--completed">
+        <span className="summary-strip__label">已经看完</span>
+        <strong className="summary-strip__value">{completedCount}</strong>
+        <span className="summary-strip__suffix">项完成</span>
       </div>
     </section>
   );
@@ -807,7 +879,7 @@ type EntryWriteAction =
   | { type: "progress"; delta: 1 | -1 }
   | { type: "status"; status: MediaEntry["status"] };
 
-function EntryCard({
+function EntryRow({
   entry,
   pending,
   error,
@@ -831,40 +903,61 @@ function EntryCard({
       entry.currentProgress >= entry.totalProgress);
 
   return (
-    <li className={`entry-card entry-card--${entry.mediaType}`}>
-      <article aria-labelledby={titleId} aria-busy={pending}>
-        <div className="entry-card__topline">
-          <span className="media-type">
-            <MediaTypeIcon type={entry.mediaType} />
-            {MEDIA_TYPE_LABELS[entry.mediaType]}
-          </span>
-          <span className={`entry-status entry-status--${entry.status}`}>
-            <span aria-hidden="true" />
-            {ENTRY_STATUS_LABELS[entry.status]}
-          </span>
+    <li className="entry-list__item">
+      <article
+        className={`entry entry--${entry.mediaType}`}
+        aria-labelledby={titleId}
+        aria-busy={pending}
+        onDoubleClick={(event) => {
+          if ((event.target as HTMLElement).closest("button")) {
+            return;
+          }
+          onEdit();
+        }}
+      >
+        <span className={`entry__tile entry__tile--${entry.mediaType}`} aria-hidden="true">
+          <MediaTypeIcon type={entry.mediaType} />
+        </span>
+
+        <div className="entry__body">
+          <div className="entry__headline">
+            <h3 className="entry__title" id={titleId}>
+              {entry.title}
+            </h3>
+            <span className={`status-pill status-pill--${entry.status}`}>
+              <span className="status-pill__dot" aria-hidden="true" />
+              {ENTRY_STATUS_LABELS[entry.status]}
+            </span>
+          </div>
+          <div className="entry__meta">
+            <span className="entry__type-label">
+              {MEDIA_TYPE_LABELS[entry.mediaType]}
+            </span>
+            <span className="entry__dot" aria-hidden="true">·</span>
+            <time className="entry__time" dateTime={entry.updatedAt}>
+              更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}
+            </time>
+          </div>
+          {pending ? (
+            <p className="entry__write-status" role="status">
+              正在更新《{entry.title}》…
+            </p>
+          ) : null}
+          {error ? (
+            <p className="entry__write-error" role="alert">
+              {error}
+            </p>
+          ) : null}
         </div>
 
-        <h3 className="entry-card__title" id={titleId}>
-          {entry.title}
-        </h3>
-
-        <div className="entry-progress">
-          <div className="entry-progress__heading">
-            <span>当前进度</span>
-            <strong>{formatProgress(entry)}</strong>
-          </div>
-
+        <div className="entry__progress">
+          <span className="entry__progress-value">{formatProgress(entry)}</span>
           {percentage === null ? (
-            <p className="entry-progress__unknown">
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M6.2 7.2C3.8 8.6 2.5 10 2.5 10s2.8 4.5 7.5 4.5c1 0 1.9-.2 2.7-.5M13.8 12.8c2.4-1.4 3.7-2.8 3.7-2.8S14.7 5.5 10 5.5c-1 0-1.9.2-2.7.5M4 3l12 14" />
-              </svg>
-              总进度未知，先记下这一刻
-            </p>
+            <span className="entry__unknown">总进度未知</span>
           ) : (
-            <div className="entry-progress__bar-row">
+            <div className="entry__bar-row">
               <div
-                className="entry-progress__track"
+                className="entry__bar"
                 role="progressbar"
                 aria-label={`${entry.title}的观看或阅读进度`}
                 aria-valuemin={0}
@@ -873,36 +966,34 @@ function EntryCard({
               >
                 <span style={{ width: `${percentage}%` }} />
               </div>
-              <span className="entry-progress__percentage">{percentage}%</span>
+              <span className="entry__percentage">{percentage}%</span>
             </div>
           )}
         </div>
 
-        <div className="quick-progress" aria-label={`${entry.title}的快捷操作`}>
-          <div className="quick-progress__steps">
+        <div className="entry__actions">
+          <div className="stepper" role="group" aria-label={`${entry.title}的快捷操作`}>
             <button
-              className="quick-progress__step"
+              className="stepper__button"
               type="button"
               aria-label={`《${entry.title}》进度减一`}
               disabled={decrementDisabled}
               onClick={() => onWrite({ type: "progress", delta: -1 })}
             >
-              <span aria-hidden="true">−</span>
-              <span>1</span>
+              −
             </button>
             <button
-              className="quick-progress__step"
+              className="stepper__button"
               type="button"
               aria-label={`《${entry.title}》进度加一`}
               disabled={incrementDisabled}
               onClick={() => onWrite({ type: "progress", delta: 1 })}
             >
-              <span aria-hidden="true">+</span>
-              <span>1</span>
+              +
             </button>
           </div>
           <button
-            className="quick-progress__status"
+            className="ghost-button"
             type="button"
             aria-label={
               entry.status === "completed"
@@ -919,33 +1010,12 @@ function EntryCard({
           >
             {entry.status === "completed" ? "重新追更" : "标记完成"}
           </button>
-        </div>
-        {pending ? (
-          <p className="entry-card__write-status" role="status">
-            正在更新《{entry.title}》…
-          </p>
-        ) : null}
-        {error ? (
-          <p className="entry-card__write-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="entry-card__footer">
-          <div className="entry-card__updated">
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <circle cx="10" cy="10" r="7" />
-              <path d="M10 6v4l2.5 1.5" />
-            </svg>
-            <time dateTime={entry.updatedAt}>
-              更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}
-            </time>
-          </div>
-          <div className="entry-card__actions">
+          <div className="entry__icon-actions">
             <button
-              className="icon-button entry-card__action"
+              className="icon-button"
               type="button"
               aria-label={`编辑《${entry.title}》`}
+              title="编辑"
               disabled={pending}
               onClick={onEdit}
             >
@@ -954,9 +1024,10 @@ function EntryCard({
               </svg>
             </button>
             <button
-              className="icon-button entry-card__action entry-card__action--delete"
+              className="icon-button icon-button--danger"
               type="button"
               aria-label={`删除《${entry.title}》`}
+              title="删除"
               disabled={pending}
               onClick={onDelete}
             >
@@ -1001,6 +1072,10 @@ function App() {
   const latestRequest = useRef(0);
   const entryWriteLocks = useRef(new Set<string>());
   const addButtonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const dialogOpenRef = useRef(false);
+
+  dialogOpenRef.current = editor !== null || pendingDeletion !== null;
 
   function handleEntryUpdated(updatedEntry: MediaEntry) {
     setLibrary((current) => ({
@@ -1103,20 +1178,74 @@ function App() {
     };
   }, [loadEntries]);
 
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!modifier) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === "n") {
+        event.preventDefault();
+        if (!dialogOpenRef.current) {
+          setEditor({ mode: "create" });
+        }
+      } else if (key === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    async function subscribeToMenu() {
+      if (!("__TAURI_INTERNALS__" in window)) {
+        return;
+      }
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const stop = await listen("catchup://new-entry", () => {
+          if (!dialogOpenRef.current) {
+            setEditor({ mode: "create" });
+          }
+        });
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      } catch {
+        // 浏览器预览或测试环境下没有 Tauri 事件系统，忽略即可。
+      }
+    }
+
+    void subscribeToMenu();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   const normalizedTitleQuery = titleQuery.trim().toLowerCase();
   const hasActiveFilters =
     normalizedTitleQuery.length > 0 ||
     mediaTypeFilter !== "all" ||
     statusFilter !== "all";
-  const visibleEntries =
-    library.status === "success"
-      ? library.entries.filter(
-          (entry) =>
-            entry.title.toLowerCase().includes(normalizedTitleQuery) &&
-            (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
-            (statusFilter === "all" || entry.status === statusFilter),
-        )
-      : [];
+  const allEntries = library.status === "success" ? library.entries : [];
+  const visibleEntries = allEntries.filter(
+    (entry) =>
+      entry.title.toLowerCase().includes(normalizedTitleQuery) &&
+      (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
+      (statusFilter === "all" || entry.status === statusFilter),
+  );
 
   function clearFilters() {
     setTitleQuery("");
@@ -1126,52 +1255,122 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div className="brand" aria-label="追更 CatchUp">
-          <BrandMark />
-          <span className="brand-name">追更</span>
-          <span className="brand-divider" aria-hidden="true" />
-          <span className="brand-name-en">CatchUp</span>
-        </div>
-        <span className="local-note">
-          <span aria-hidden="true" />
-          本地内容库
-        </span>
-      </header>
+      <Sidebar
+        entries={allEntries}
+        statusFilter={statusFilter}
+        mediaTypeFilter={mediaTypeFilter}
+        onStatusFilter={(status) =>
+          setStatusFilter((current) => (current === status ? "all" : status))
+        }
+        onMediaTypeFilter={setMediaTypeFilter}
+      />
 
-      <main className="main-content">
-        <section className="intro" aria-labelledby="page-title">
-          <p className="intro__eyebrow">你的私人进度手册</p>
-          <h1 id="page-title">
-            每一次更新，<span>都接得上。</span>
-          </h1>
-          <p className="intro__description">
-            剧集、番剧、综艺、小说与电影，都在这一页从容继续。
-          </p>
-        </section>
-
-        <section className="library" aria-labelledby="library-title">
-          <div className="library__heading">
-            <div>
-              <p className="library__eyebrow">MY LIBRARY</p>
-              <h2 id="library-title">我的内容库</h2>
-            </div>
-            <div className="library__heading-actions">
-              <span className="library__heading-note">不疾不徐，持续喜欢</span>
-              <button
-                className="primary-button library__add"
-                type="button"
-                ref={addButtonRef}
-                disabled={library.status === "loading"}
-                onClick={() => setEditor({ mode: "create" })}
-              >
-                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="M10 4v12M4 10h12" />
-                </svg>
-                添加条目
-              </button>
-            </div>
+      <div className="app-main">
+        <header className="topbar">
+          <div className="mobile-brand" aria-label="追更 CatchUp">
+            <BrandMark size={24} />
+            <strong>追更</strong>
           </div>
+
+          <div className="topbar__title">
+            <h1>内容库</h1>
+            <p>
+              {library.status === "success"
+                ? `${library.entries.length} 个条目`
+                : "本地收藏"}
+            </p>
+          </div>
+
+          <div className="search-field">
+            <label className="sr-only" htmlFor="library-title-query">
+              搜索标题
+            </label>
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="8.5" cy="8.5" r="5.5" />
+              <path d="m12.5 12.5 4 4" />
+            </svg>
+            <input
+              id="library-title-query"
+              ref={searchInputRef}
+              type="search"
+              value={titleQuery}
+              placeholder="搜索标题"
+              autoComplete="off"
+              onChange={(event) => setTitleQuery(event.target.value)}
+            />
+          </div>
+
+          <div className="filter-row">
+            <label className="sr-only" htmlFor="library-media-type-filter">
+              类型筛选
+            </label>
+            <select
+              id="library-media-type-filter"
+              className="compact-select"
+              value={mediaTypeFilter}
+              onChange={(event) =>
+                setMediaTypeFilter(event.target.value as MediaType | "all")
+              }
+            >
+              <option value="all">全部类型</option>
+              {MEDIA_TYPES.map((mediaType) => (
+                <option key={mediaType} value={mediaType}>
+                  {MEDIA_TYPE_LABELS[mediaType]}
+                </option>
+              ))}
+            </select>
+
+            <label className="sr-only" htmlFor="library-status-filter">
+              状态筛选
+            </label>
+            <select
+              id="library-status-filter"
+              className="compact-select"
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(
+                  event.target.value as MediaEntry["status"] | "all",
+                )
+              }
+            >
+              <option value="all">全部状态</option>
+              {ENTRY_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {ENTRY_STATUS_LABELS[status]}
+                </option>
+              ))}
+            </select>
+
+            {hasActiveFilters && visibleEntries.length > 0 ? (
+              <button
+                className="link-button"
+                type="button"
+                onClick={clearFilters}
+              >
+                清除搜索和筛选
+              </button>
+            ) : null}
+          </div>
+
+          <button
+            className="primary-button add-button"
+            type="button"
+            ref={addButtonRef}
+            aria-label="添加条目"
+            disabled={library.status === "loading"}
+            onClick={() => setEditor({ mode: "create" })}
+          >
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M10 4v12M4 10h12" />
+            </svg>
+            <span>添加条目</span>
+          </button>
+        </header>
+
+        <div className="app-content">
+          {library.status === "success" && library.entries.length > 0 ? (
+            <SummaryStrip entries={library.entries} />
+          ) : null}
 
           {library.status === "loading" ? (
             <LoadingState />
@@ -1184,105 +1383,80 @@ function App() {
             />
           ) : library.entries.length === 0 ? (
             <EmptyState onAdd={() => setEditor({ mode: "create" })} />
+          ) : visibleEntries.length > 0 ? (
+            <ul className="entry-list" aria-label="追更内容列表">
+              {visibleEntries.map((entry) => (
+                <EntryRow
+                  entry={entry}
+                  key={entry.id}
+                  pending={pendingEntryWrites.has(entry.id)}
+                  error={entryWriteErrors[entry.id] ?? null}
+                  onWrite={(action) => {
+                    void handleEntryWrite(entry, action);
+                  }}
+                  onEdit={() => setEditor({ mode: "edit", entry })}
+                  onDelete={() => setPendingDeletion(entry)}
+                />
+              ))}
+            </ul>
           ) : (
-            <>
-              <LibrarySummary entries={library.entries} />
-              <section
-                className="library-filters"
-                role="search"
-                aria-label="内容库搜索与筛选"
-              >
-                <div className="library-filter library-filter--search">
-                  <label htmlFor="library-title-query">搜索标题</label>
-                  <div className="library-filter__search-input">
-                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                      <circle cx="8.5" cy="8.5" r="5.5" />
-                      <path d="m12.5 12.5 4 4" />
-                    </svg>
-                    <input
-                      id="library-title-query"
-                      type="search"
-                      value={titleQuery}
-                      placeholder="输入作品标题"
-                      autoComplete="off"
-                      onChange={(event) => setTitleQuery(event.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="library-filter">
-                  <label htmlFor="library-media-type-filter">类型筛选</label>
-                  <select
-                    id="library-media-type-filter"
-                    value={mediaTypeFilter}
-                    onChange={(event) =>
-                      setMediaTypeFilter(event.target.value as MediaType | "all")
-                    }
-                  >
-                    <option value="all">全部类型</option>
-                    {MEDIA_TYPES.map((mediaType) => (
-                      <option key={mediaType} value={mediaType}>
-                        {MEDIA_TYPE_LABELS[mediaType]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="library-filter">
-                  <label htmlFor="library-status-filter">状态筛选</label>
-                  <select
-                    id="library-status-filter"
-                    value={statusFilter}
-                    onChange={(event) =>
-                      setStatusFilter(
-                        event.target.value as MediaEntry["status"] | "all",
-                      )
-                    }
-                  >
-                    <option value="all">全部状态</option>
-                    {ENTRY_STATUSES.map((status) => (
-                      <option key={status} value={status}>
-                        {ENTRY_STATUS_LABELS[status]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {hasActiveFilters && visibleEntries.length > 0 ? (
-                  <button
-                    className="secondary-button library-filters__clear"
-                    type="button"
-                    onClick={clearFilters}
-                  >
-                    清除搜索和筛选
-                  </button>
-                ) : null}
-              </section>
-              {visibleEntries.length > 0 ? (
-                <ul className="entry-grid" aria-label="追更内容列表">
-                  {visibleEntries.map((entry) => (
-                    <EntryCard
-                      entry={entry}
-                      key={entry.id}
-                      pending={pendingEntryWrites.has(entry.id)}
-                      error={entryWriteErrors[entry.id] ?? null}
-                      onWrite={(action) => {
-                        void handleEntryWrite(entry, action);
-                      }}
-                      onEdit={() => setEditor({ mode: "edit", entry })}
-                      onDelete={() => setPendingDeletion(entry)}
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <NoResultsState onClear={clearFilters} />
-              )}
-            </>
+            <NoResultsState onClear={clearFilters} />
           )}
-        </section>
-      </main>
+        </div>
 
-      <footer className="app-footer">
-        <span>追更 · CatchUp</span>
-        <span>把故事留在身边，把进度交给时间。</span>
-      </footer>
+        <footer className="statusbar">
+          <span>
+            {library.status === "success"
+              ? `共 ${library.entries.length} 项 · 已保存到本机`
+              : "追更 · CatchUp"}
+          </span>
+          <span className="statusbar__hints">
+            <kbd>Ctrl</kbd>+<kbd>N</kbd> 新建
+            <span className="statusbar__sep" aria-hidden="true" />
+            <kbd>Ctrl</kbd>+<kbd>F</kbd> 搜索
+            <span className="statusbar__sep" aria-hidden="true" />
+            双击条目可编辑
+          </span>
+        </footer>
+      </div>
+
+      <nav className="tabbar" aria-label="主导航">
+        <button
+          className="tabbar__item"
+          type="button"
+          aria-pressed={statusFilter === "all"}
+          onClick={() => setStatusFilter("all")}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+          </svg>
+          <span>内容库</span>
+        </button>
+        <button
+          className="tabbar__item"
+          type="button"
+          aria-pressed={statusFilter === "tracking"}
+          onClick={() => setStatusFilter("tracking")}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="m10 8.5 5 3.5-5 3.5v-7Z" />
+          </svg>
+          <span>在追</span>
+        </button>
+        <button
+          className="tabbar__item"
+          type="button"
+          aria-pressed={statusFilter === "completed"}
+          onClick={() => setStatusFilter("completed")}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="m8.5 12 2.6 2.6 4.6-5" />
+          </svg>
+          <span>已完成</span>
+        </button>
+      </nav>
 
       {editor ? (
         <EntryFormDialog

@@ -56,6 +56,57 @@ pub fn run() {
             let database = Database::open(data_directory.join("catchup.sqlite3"))
                 .map_err(std::io::Error::other)?;
             app.manage(database);
+
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+                use tauri::Emitter;
+
+                let new_entry =
+                    MenuItem::with_id(app, "new_entry", "新建条目", true, Some("CmdOrCtrl+N"))?;
+                let file_menu = Submenu::with_items(
+                    app,
+                    "文件",
+                    true,
+                    &[
+                        &new_entry,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+                    ],
+                )?;
+                let edit_menu = Submenu::with_items(
+                    app,
+                    "编辑",
+                    true,
+                    &[
+                        &PredefinedMenuItem::undo(app, Some("撤销"))?,
+                        &PredefinedMenuItem::redo(app, Some("重做"))?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::cut(app, Some("剪切"))?,
+                        &PredefinedMenuItem::copy(app, Some("复制"))?,
+                        &PredefinedMenuItem::paste(app, Some("粘贴"))?,
+                        &PredefinedMenuItem::select_all(app, Some("全选"))?,
+                    ],
+                )?;
+                let window_menu = Submenu::with_items(
+                    app,
+                    "窗口",
+                    true,
+                    &[
+                        &PredefinedMenuItem::minimize(app, Some("最小化"))?,
+                        &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+                    ],
+                )?;
+                let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu])?;
+                app.set_menu(menu)?;
+
+                app.on_menu_event(|app, event| {
+                    if event.id() == "new_entry" {
+                        let _ = app.emit("catchup://new-entry", ());
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

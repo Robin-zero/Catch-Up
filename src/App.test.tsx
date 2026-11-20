@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -859,6 +859,11 @@ describe("条目管理", () => {
       currentProgress: 8,
       totalProgress: null,
       status: "completed",
+      season: null,
+      rating: null,
+      platform: null,
+      coverUrl: null,
+      overview: null,
     });
     const summary = screen.getByRole("region", { name: "内容库摘要" });
     expect(summary).toHaveTextContent("条目总数2项");
@@ -929,6 +934,11 @@ describe("条目管理", () => {
       currentProgress: 4,
       totalProgress: 10,
       status: "completed",
+      season: null,
+      rating: null,
+      platform: null,
+      coverUrl: null,
+      overview: null,
     });
     const list = screen.getByRole("list", { name: "追更内容列表" });
     const articles = within(list).getAllByRole("article");
@@ -1132,5 +1142,278 @@ describe("条目管理", () => {
     await user.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("article", { name: target.title })).toBeVisible();
+  });
+});
+
+describe("短剧与条目元数据", () => {
+  it("短剧使用“短剧”标签和“集”单位，并出现在侧边栏与类型筛选中", async () => {
+    const user = userEvent.setup();
+    const shortDrama = makeEntry({
+      id: "short-drama",
+      title: "闪婚之后",
+      mediaType: "short_drama",
+      currentProgress: 3,
+      totalProgress: 10,
+    });
+    mockedListEntries.mockResolvedValue([shortDrama]);
+
+    render(<App />);
+
+    const card = await screen.findByRole("article", {
+      name: shortDrama.title,
+    });
+    expect(within(card).getByText("短剧")).toBeInTheDocument();
+    expect(within(card).getByText("3 / 10 集")).toBeInTheDocument();
+    expect(within(card).getByText("30%")).toBeInTheDocument();
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    expect(
+      within(sidebar).getByRole("button", { name: /短剧/ }),
+    ).toHaveTextContent("1");
+
+    await user.selectOptions(
+      screen.getByLabelText("类型筛选"),
+      "short_drama",
+    );
+    expect(screen.getByRole("article", { name: shortDrama.title })).toBeVisible();
+  });
+
+  it("条目卡片展示季、评分与平台标签，并保留类型与更新时间", async () => {
+    mockedListEntries.mockResolvedValue([
+      makeEntry({
+        title: "漫长的季节",
+        season: 2,
+        rating: 8.6,
+        platform: "腾讯视频",
+      }),
+    ]);
+
+    render(<App />);
+
+    const card = await screen.findByRole("article", {
+      name: "漫长的季节",
+    });
+    expect(within(card).getByText("剧集")).toBeInTheDocument();
+    expect(within(card).getByText("第 2 季")).toBeInTheDocument();
+    expect(within(card).getByText("★ 8.6")).toBeInTheDocument();
+    expect(within(card).getByText("腾讯视频")).toBeInTheDocument();
+    expect(within(card).getByText(/^更新于 /)).toBeInTheDocument();
+    expect(within(card).getByText("3 / 12 集")).toBeInTheDocument();
+    expect(within(card).getByText("25%")).toBeInTheDocument();
+  });
+
+  it("有封面 URL 时在类型图标位置显示缩略图", async () => {
+    const coverUrl = "https://example.com/poster.jpg";
+    mockedListEntries.mockResolvedValue([
+      makeEntry({ title: "有封面的剧", coverUrl }),
+    ]);
+
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: "有封面的剧" });
+    const image = card.querySelector("img.entry__cover");
+    expect(image).not.toBeNull();
+    expect(image).toHaveAttribute("src", coverUrl);
+    expect(card.querySelector(".media-type__icon")).toBeNull();
+  });
+
+  it("封面加载失败后回退为类型图标", async () => {
+    mockedListEntries.mockResolvedValue([
+      makeEntry({
+        title: "封面失效的剧",
+        coverUrl: "https://example.com/broken.jpg",
+      }),
+    ]);
+
+    render(<App />);
+
+    const card = await screen.findByRole("article", { name: "封面失效的剧" });
+    const image = card.querySelector("img.entry__cover");
+    expect(image).not.toBeNull();
+
+    fireEvent.error(image!);
+
+    expect(card.querySelector("img.entry__cover")).toBeNull();
+    expect(card.querySelector(".media-type__icon")).not.toBeNull();
+  });
+
+  it("已弃剧使用独立胶囊样式，并支持状态筛选与表单状态", async () => {
+    const user = userEvent.setup();
+    const dropped = makeEntry({
+      id: "dropped",
+      title: "已经弃掉的剧",
+      status: "dropped",
+    });
+    const tracking = makeEntry({
+      id: "tracking",
+      title: "还在追的剧",
+      status: "tracking",
+    });
+    mockedListEntries.mockResolvedValue([dropped, tracking]);
+
+    render(<App />);
+
+    const droppedCard = await screen.findByRole("article", {
+      name: dropped.title,
+    });
+    const pill = within(droppedCard).getByText("已弃剧");
+    expect(pill).toHaveClass("status-pill", "status-pill--dropped");
+
+    await user.selectOptions(
+      screen.getByLabelText("状态筛选"),
+      "dropped",
+    );
+    expect(screen.getByRole("article", { name: dropped.title })).toBeVisible();
+    expect(screen.queryByRole("article", { name: tracking.title })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    const statusSelect = within(dialog).getByLabelText("状态");
+    expect(
+      within(dialog).getByRole("option", { name: "已弃剧" }),
+    ).toBeInTheDocument();
+    await user.selectOptions(statusSelect, "dropped");
+    expect(statusSelect).toHaveValue("dropped");
+  });
+
+  it("表单保存季、评分、平台、封面和简介，并渲染后端结果", async () => {
+    const user = userEvent.setup();
+    const coverUrl = "https://example.com/new.jpg";
+    const created = makeEntry({
+      id: "created-meta",
+      title: "新短剧",
+      mediaType: "short_drama",
+      currentProgress: 0,
+      totalProgress: null,
+      season: 2,
+      rating: 8.6,
+      platform: "腾讯视频",
+      coverUrl,
+      overview: "一句话简介",
+    });
+    mockedListEntries.mockResolvedValue([]);
+    mockedCreateEntry.mockResolvedValue(created);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    await user.type(within(dialog).getByLabelText("标题"), "新短剧");
+    await user.selectOptions(within(dialog).getByLabelText("类型"), "short_drama");
+    await user.type(within(dialog).getByLabelText("季"), "2");
+    await user.type(within(dialog).getByLabelText("评分"), "8.6");
+    await user.type(within(dialog).getByLabelText("平台"), "腾讯视频");
+    await user.type(within(dialog).getByLabelText("封面 URL"), coverUrl);
+    await user.type(within(dialog).getByLabelText("简介"), "一句话简介");
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(
+      await screen.findByRole("article", { name: created.title }),
+    ).toBeInTheDocument();
+    expect(mockedCreateEntry).toHaveBeenCalledWith({
+      title: "新短剧",
+      mediaType: "short_drama",
+      currentProgress: 0,
+      totalProgress: null,
+      status: "tracking",
+      season: 2,
+      rating: 8.6,
+      platform: "腾讯视频",
+      coverUrl,
+      overview: "一句话简介",
+    });
+
+    const card = screen.getByRole("article", { name: created.title });
+    expect(within(card).getByText("短剧")).toBeInTheDocument();
+    expect(within(card).getByText("第 2 季")).toBeInTheDocument();
+    expect(within(card).getByText("★ 8.6")).toBeInTheDocument();
+    expect(within(card).getByText("腾讯视频")).toBeInTheDocument();
+    expect(card.querySelector("img.entry__cover")).toHaveAttribute(
+      "src",
+      coverUrl,
+    );
+  });
+
+  it("季和评分的非法值在字段旁提示并阻止提交", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    await user.type(within(dialog).getByLabelText("标题"), "校验条目");
+    const season = within(dialog).getByLabelText("季");
+    const rating = within(dialog).getByLabelText("评分");
+    await user.type(season, "0");
+    await user.type(rating, "10.5");
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(season).toHaveAttribute("aria-invalid", "true");
+    expect(season).toHaveAccessibleDescription("季数必须是 1 到 999 的整数。");
+    expect(season).toHaveFocus();
+    expect(rating).toHaveAttribute("aria-invalid", "true");
+    expect(rating).toHaveAccessibleDescription(
+      "评分必须是 0 到 10 之间的数字，且最多 1 位小数。",
+    );
+    expect(mockedCreateEntry).not.toHaveBeenCalled();
+
+    await user.clear(season);
+    await user.type(season, "2");
+    await user.clear(rating);
+    await user.type(rating, "8.25");
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(season).not.toHaveAttribute("aria-invalid");
+    expect(rating).toHaveAccessibleDescription(
+      "评分必须是 0 到 10 之间的数字，且最多 1 位小数。",
+    );
+    expect(rating).toHaveFocus();
+    expect(mockedCreateEntry).not.toHaveBeenCalled();
+  });
+
+  it("封面只接受 http/https 链接，留空的可选字段提交为 null", async () => {
+    const user = userEvent.setup();
+    const created = makeEntry({ id: "created-empty-options", title: "合法条目" });
+    mockedListEntries.mockResolvedValue([]);
+    mockedCreateEntry.mockResolvedValue(created);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    await user.type(within(dialog).getByLabelText("标题"), "合法条目");
+    const cover = within(dialog).getByLabelText("封面 URL");
+    await user.type(cover, "ftp://example.com/a.jpg");
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(cover).toHaveAttribute("aria-invalid", "true");
+    expect(cover).toHaveAccessibleDescription(
+      "封面必须是以 http:// 或 https:// 开头的链接。",
+    );
+    expect(cover).toHaveFocus();
+    expect(mockedCreateEntry).not.toHaveBeenCalled();
+
+    await user.clear(cover);
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(
+      await screen.findByRole("article", { name: created.title }),
+    ).toBeInTheDocument();
+    expect(mockedCreateEntry).toHaveBeenCalledWith({
+      title: "合法条目",
+      mediaType: "drama",
+      currentProgress: 0,
+      totalProgress: null,
+      status: "tracking",
+      season: null,
+      rating: null,
+      platform: null,
+      coverUrl: null,
+      overview: null,
+    });
   });
 });

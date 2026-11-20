@@ -28,6 +28,22 @@ export function setEntryStatus(
   return invoke<MediaEntry>("set_entry_status", { id, status });
 }
 
+export function listTrash(): Promise<MediaEntry[]> {
+  return invoke<MediaEntry[]>("list_trash");
+}
+
+export function restoreEntry(id: string): Promise<MediaEntry> {
+  return invoke<MediaEntry>("restore_entry", { id });
+}
+
+export function purgeEntry(id: string): Promise<void> {
+  return invoke<void>("purge_entry", { id });
+}
+
+export function emptyTrash(): Promise<void> {
+  return invoke<void>("empty_trash");
+}
+
 export function getLibraryErrorMessage(error: unknown): string {
   const message =
     error instanceof Error

@@ -4,8 +4,12 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  emptyTrash,
   getLibraryErrorMessage,
   listEntries,
+  listTrash,
+  purgeEntry,
+  restoreEntry,
   setEntryStatus,
   updateEntry,
 } from "./api";
@@ -95,6 +99,38 @@ describe("Tauri 数据访问", () => {
       id: entry.id,
       status: "completed",
     });
+  });
+
+  it("通过 list_trash 读取回收站条目", async () => {
+    mockedInvoke.mockResolvedValue([entry]);
+
+    await expect(listTrash()).resolves.toEqual([entry]);
+    expect(mockedInvoke).toHaveBeenCalledWith("list_trash");
+  });
+
+  it("通过 restore_entry 恢复指定条目", async () => {
+    mockedInvoke.mockResolvedValue(entry);
+
+    await expect(restoreEntry(entry.id)).resolves.toEqual(entry);
+    expect(mockedInvoke).toHaveBeenCalledWith("restore_entry", {
+      id: entry.id,
+    });
+  });
+
+  it("通过 purge_entry 彻底删除指定条目", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+
+    await expect(purgeEntry(entry.id)).resolves.toBeUndefined();
+    expect(mockedInvoke).toHaveBeenCalledWith("purge_entry", {
+      id: entry.id,
+    });
+  });
+
+  it("通过 empty_trash 清空回收站", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+
+    await expect(emptyTrash()).resolves.toBeUndefined();
+    expect(mockedInvoke).toHaveBeenCalledWith("empty_trash");
   });
 });
 

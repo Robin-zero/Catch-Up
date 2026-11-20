@@ -56,7 +56,8 @@ p {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -272,6 +273,10 @@ svg {
 
 .sidebar__type-dot--movie {
   background: #7a5aa8;
+}
+
+.sidebar__type-dot--short_drama {
+  background: #b9683a;
 }
 
 .sidebar__footer {
@@ -654,6 +659,27 @@ svg {
   color: #7a5aa8;
 }
 
+.entry__tile--short_drama {
+  background: #fbece2;
+  color: #b25f2a;
+}
+
+.entry__tile--cover {
+  width: 34px;
+  height: 46px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.entry__cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .media-type__icon {
   width: 17px;
   height: 17px;
@@ -712,6 +738,11 @@ svg {
   color: #6f7469;
 }
 
+.status-pill--dropped {
+  background: #faf1e2;
+  color: #9a6c22;
+}
+
 .entry__meta {
   display: flex;
   align-items: center;
@@ -719,6 +750,24 @@ svg {
   margin-top: 2px;
   font-size: 11px;
   color: var(--text-tertiary);
+  flex-wrap: wrap;
+}
+
+.entry__season,
+.entry__rating {
+  font-variant-numeric: tabular-nums;
+}
+
+.entry__platform {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .entry__dot {
@@ -1165,6 +1214,19 @@ kbd {
   outline: none;
 }
 
+.form-field textarea {
+  width: 100%;
+  min-height: 62px;
+  padding: 7px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+}
+
 .form-field select {
   appearance: none;
   padding-right: 24px;
@@ -1179,7 +1241,16 @@ kbd {
   box-shadow: 0 0 0 3px rgba(31, 93, 72, 0.12);
 }
 
+.form-field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 93, 72, 0.12);
+}
+
 .form-field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.form-field textarea[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -1349,6 +1420,11 @@ kbd {
   .entry__tile {
     width: 30px;
     height: 30px;
+  }
+
+  .entry__tile--cover {
+    width: 32px;
+    height: 44px;
   }
 
   .entry__title {
@@ -1540,10 +1616,17 @@ kbd {
   }
 
   .form-field input,
-  .form-field select {
+  .form-field select,
+  .form-field textarea {
     height: 40px;
     font-size: 15px;
     border-radius: 8px;
+  }
+
+  .form-field textarea {
+    height: auto;
+    min-height: 84px;
+    padding: 9px 10px;
   }
 
   .field-hint {

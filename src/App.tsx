@@ -21,6 +21,8 @@ import {
   ENTRY_STATUS_LABELS,
   MEDIA_TYPE_LABELS,
   MEDIA_TYPE_UNITS,
+  PLATFORM_PRESETS,
+  type EntryInput,
   type MediaEntry,
   type MediaType,
 } from "./types";
@@ -69,10 +71,16 @@ const MEDIA_TYPE_ICONS: Record<MediaType, ReactNode> = {
       <path d="M4 9h16v11H4zM4 4h16v5H4zM8 4l3 5M14 4l3 5" />
     </>
   ),
+  short_drama: (
+    <>
+      <rect x="8" y="3" width="8" height="18" rx="2.5" />
+      <path d="m10.8 9 3.2 2-3.2 2V9ZM4.5 7.5H7M4.5 12H7M4.5 16.5H7M17 7.5h2.5M17 12h2.5M17 16.5h2.5" />
+    </>
+  ),
 };
 
 const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
-const ENTRY_STATUSES = ["tracking", "completed"] as const;
+const ENTRY_STATUSES = ["tracking", "completed", "dropped"] as const;
 
 function BrandMark({ size = 28 }: { size?: number }) {
   return (
@@ -100,6 +108,43 @@ function MediaTypeIcon({ type }: { type: MediaType }) {
     >
       {MEDIA_TYPE_ICONS[type]}
     </svg>
+  );
+}
+
+function EntryTile({
+  type,
+  coverUrl,
+}: {
+  type: MediaType;
+  coverUrl?: string | null;
+}) {
+  const [coverFailed, setCoverFailed] = useState(false);
+  const [failedCoverUrl, setFailedCoverUrl] = useState<string | null>(null);
+  const showCover =
+    Boolean(coverUrl) && !(coverFailed && failedCoverUrl === coverUrl);
+
+  return (
+    <span
+      className={`entry__tile entry__tile--${type}${
+        showCover ? " entry__tile--cover" : ""
+      }`}
+      aria-hidden="true"
+    >
+      {showCover && coverUrl ? (
+        <img
+          className="entry__cover"
+          src={coverUrl}
+          alt=""
+          loading="lazy"
+          onError={() => {
+            setFailedCoverUrl(coverUrl);
+            setCoverFailed(true);
+          }}
+        />
+      ) : (
+        <MediaTypeIcon type={type} />
+      )}
+    </span>
   );
 }
 
@@ -324,9 +369,22 @@ interface EntryFormValues {
   currentProgress: string;
   totalProgress: string;
   status: MediaEntry["status"];
+  season: string;
+  rating: string;
+  platform: string;
+  coverUrl: string;
+  overview: string;
 }
 
-type EntryField = "title" | "currentProgress" | "totalProgress";
+type EntryField =
+  | "title"
+  | "currentProgress"
+  | "totalProgress"
+  | "season"
+  | "rating"
+  | "platform"
+  | "coverUrl"
+  | "overview";
 type EntryFormErrors = Partial<Record<EntryField | "form", string>>;
 
 function getWriteErrorMessage(error: unknown, fallback: string): string {
@@ -359,6 +417,17 @@ function EntryFormDialog({
       ? String(editingEntry.totalProgress)
       : "",
     status: editingEntry?.status ?? "tracking",
+    season:
+      editingEntry?.season !== null && editingEntry?.season !== undefined
+        ? String(editingEntry.season)
+        : "",
+    rating:
+      editingEntry?.rating !== null && editingEntry?.rating !== undefined
+        ? String(editingEntry.rating)
+        : "",
+    platform: editingEntry?.platform ?? "",
+    coverUrl: editingEntry?.coverUrl ?? "",
+    overview: editingEntry?.overview ?? "",
   }));
   const [errors, setErrors] = useState<EntryFormErrors>({});
   const [saving, setSaving] = useState(false);
@@ -366,6 +435,11 @@ function EntryFormDialog({
   const titleRef = useRef<HTMLInputElement>(null);
   const currentProgressRef = useRef<HTMLInputElement>(null);
   const totalProgressRef = useRef<HTMLInputElement>(null);
+  const seasonRef = useRef<HTMLInputElement>(null);
+  const ratingRef = useRef<HTMLInputElement>(null);
+  const platformRef = useRef<HTMLInputElement>(null);
+  const coverUrlRef = useRef<HTMLInputElement>(null);
+  const overviewRef = useRef<HTMLTextAreaElement>(null);
   const unit = MEDIA_TYPE_UNITS[values.mediaType];
   const titleId = "entry-form-title";
 
@@ -394,6 +468,11 @@ function EntryFormDialog({
     const title = values.title.trim();
     const currentProgressText = values.currentProgress.trim();
     const totalProgressText = values.totalProgress.trim();
+    const seasonText = values.season.trim();
+    const ratingText = values.rating.trim();
+    const platform = values.platform.trim();
+    const coverUrl = values.coverUrl.trim();
+    const overview = values.overview.trim();
     const currentProgress = Number(currentProgressText);
     const totalProgress = totalProgressText ? Number(totalProgressText) : null;
 
@@ -422,28 +501,65 @@ function EntryFormDialog({
     ) {
       nextErrors.currentProgress = "当前进度不能大于总进度。";
     }
+    if (seasonText) {
+      const season = Number(seasonText);
+      if (
+        !/^\d+$/.test(seasonText) ||
+        !Number.isSafeInteger(season) ||
+        season < 1 ||
+        season > 999
+      ) {
+        nextErrors.season = "季数必须是 1 到 999 的整数。";
+      }
+    }
+    if (
+      ratingText &&
+      !/^(?:10(?:\.0)?|[0-9](?:\.[0-9])?)$/.test(ratingText)
+    ) {
+      nextErrors.rating = "评分必须是 0 到 10 之间的数字，且最多 1 位小数。";
+    }
+    if (coverUrl && !/^https?:\/\//i.test(coverUrl)) {
+      nextErrors.coverUrl = "封面必须是以 http:// 或 https:// 开头的链接。";
+    }
+    if (platform.length > 60) {
+      nextErrors.platform = "平台名称不能超过 60 个字符。";
+    }
+    if (overview.length > 2000) {
+      nextErrors.overview = "简介不能超过 2000 个字符。";
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
-      if (nextErrors.title) {
-        titleRef.current?.focus();
-      } else if (nextErrors.currentProgress) {
-        currentProgressRef.current?.focus();
-      } else {
-        totalProgressRef.current?.focus();
-      }
+      const focusTargets: Array<
+        [EntryField, RefObject<HTMLElement | null>]
+      > = [
+        ["title", titleRef],
+        ["currentProgress", currentProgressRef],
+        ["totalProgress", totalProgressRef],
+        ["season", seasonRef],
+        ["rating", ratingRef],
+        ["coverUrl", coverUrlRef],
+        ["platform", platformRef],
+        ["overview", overviewRef],
+      ];
+      focusTargets.find(([field]) => nextErrors[field])?.[1].current?.focus();
       return;
     }
 
     savingRef.current = true;
     setSaving(true);
     setErrors({});
-    const input = {
+    const input: EntryInput = {
       title,
       mediaType: values.mediaType,
       currentProgress,
       totalProgress,
       status: values.status,
+      season: seasonText ? Number(seasonText) : null,
+      rating: ratingText ? Number(ratingText) : null,
+      platform: platform || null,
+      coverUrl: coverUrl || null,
+      overview: overview || null,
     };
 
     try {
@@ -616,6 +732,153 @@ function EntryFormDialog({
                 ))}
               </select>
             </div>
+
+            <div className="entry-form__progress-row">
+              <div className="form-field">
+                <label htmlFor="entry-season">季</label>
+                <input
+                  id="entry-season"
+                  name="season"
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max="999"
+                  step="1"
+                  placeholder="如 1"
+                  value={values.season}
+                  aria-invalid={errors.season ? true : undefined}
+                  aria-describedby={
+                    errors.season ? "entry-season-error" : undefined
+                  }
+                  ref={seasonRef}
+                  onChange={(event) =>
+                    changeField("season", event.target.value)
+                  }
+                />
+                {errors.season ? (
+                  <p className="field-error" id="entry-season-error">
+                    {errors.season}
+                  </p>
+                ) : (
+                  <p className="field-hint">选填，1–999</p>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="entry-platform">平台</label>
+                <input
+                  id="entry-platform"
+                  name="platform"
+                  type="text"
+                  list="entry-platform-options"
+                  maxLength={60}
+                  placeholder="如 腾讯视频"
+                  value={values.platform}
+                  aria-invalid={errors.platform ? true : undefined}
+                  aria-describedby={
+                    errors.platform ? "entry-platform-error" : undefined
+                  }
+                  ref={platformRef}
+                  onChange={(event) =>
+                    changeField("platform", event.target.value)
+                  }
+                />
+                <datalist id="entry-platform-options">
+                  {PLATFORM_PRESETS.map((platform) => (
+                    <option key={platform} value={platform} />
+                  ))}
+                </datalist>
+                {errors.platform ? (
+                  <p className="field-error" id="entry-platform-error">
+                    {errors.platform}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="entry-form__progress-row">
+              <div className="form-field">
+                <label htmlFor="entry-rating">评分</label>
+                <input
+                  id="entry-rating"
+                  name="rating"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  placeholder="如 8.6"
+                  value={values.rating}
+                  aria-invalid={errors.rating ? true : undefined}
+                  aria-describedby={
+                    errors.rating ? "entry-rating-error" : undefined
+                  }
+                  ref={ratingRef}
+                  onChange={(event) =>
+                    changeField("rating", event.target.value)
+                  }
+                />
+                {errors.rating ? (
+                  <p className="field-error" id="entry-rating-error">
+                    {errors.rating}
+                  </p>
+                ) : (
+                  <p className="field-hint">选填，0–10，最多 1 位小数</p>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="entry-cover-url">封面 URL</label>
+                <input
+                  id="entry-cover-url"
+                  name="coverUrl"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://…"
+                  value={values.coverUrl}
+                  aria-invalid={errors.coverUrl ? true : undefined}
+                  aria-describedby={
+                    errors.coverUrl ? "entry-cover-url-error" : undefined
+                  }
+                  ref={coverUrlRef}
+                  onChange={(event) =>
+                    changeField("coverUrl", event.target.value)
+                  }
+                />
+                {errors.coverUrl ? (
+                  <p className="field-error" id="entry-cover-url-error">
+                    {errors.coverUrl}
+                  </p>
+                ) : (
+                  <p className="field-hint">选填，需以 http 或 https 开头</p>
+                )}
+              </div>
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="entry-overview">简介</label>
+              <textarea
+                id="entry-overview"
+                name="overview"
+                rows={3}
+                maxLength={2000}
+                placeholder="选填，最多 2000 字"
+                value={values.overview}
+                aria-invalid={errors.overview ? true : undefined}
+                aria-describedby={
+                  errors.overview ? "entry-overview-error" : undefined
+                }
+                ref={overviewRef}
+                onChange={(event) =>
+                  changeField("overview", event.target.value)
+                }
+              />
+              {errors.overview ? (
+                <p className="field-error" id="entry-overview-error">
+                  {errors.overview}
+                </p>
+              ) : null}
+            </div>
           </fieldset>
         </div>
         <div className="dialog__actions">
@@ -688,7 +951,7 @@ function DeleteEntryDialog({
       <div className="dialog__body">
         <p className="dialog__description">
           确定要删除<strong className="delete-entry__title">《{entry.title}》</strong>
-          吗？此操作无法撤销。
+          吗？删除后可在回收站中找回。
         </p>
         {error ? (
           <p className="form-error" role="alert">
@@ -875,6 +1138,10 @@ function formatProgress(entry: MediaEntry): string {
   return `${entry.currentProgress}${total} ${unit}`;
 }
 
+function formatRating(rating: number): string {
+  return `★ ${rating.toFixed(1)}`;
+}
+
 type EntryWriteAction =
   | { type: "progress"; delta: 1 | -1 }
   | { type: "status"; status: MediaEntry["status"] };
@@ -915,9 +1182,7 @@ function EntryRow({
           onEdit();
         }}
       >
-        <span className={`entry__tile entry__tile--${entry.mediaType}`} aria-hidden="true">
-          <MediaTypeIcon type={entry.mediaType} />
-        </span>
+        <EntryTile type={entry.mediaType} coverUrl={entry.coverUrl} />
 
         <div className="entry__body">
           <div className="entry__headline">
@@ -933,6 +1198,24 @@ function EntryRow({
             <span className="entry__type-label">
               {MEDIA_TYPE_LABELS[entry.mediaType]}
             </span>
+            {entry.season !== null && entry.season !== undefined ? (
+              <>
+                <span className="entry__dot" aria-hidden="true">·</span>
+                <span className="entry__season">第 {entry.season} 季</span>
+              </>
+            ) : null}
+            {entry.rating !== null && entry.rating !== undefined ? (
+              <>
+                <span className="entry__dot" aria-hidden="true">·</span>
+                <span className="entry__rating">{formatRating(entry.rating)}</span>
+              </>
+            ) : null}
+            {entry.platform ? (
+              <>
+                <span className="entry__dot" aria-hidden="true">·</span>
+                <span className="entry__platform">{entry.platform}</span>
+              </>
+            ) : null}
             <span className="entry__dot" aria-hidden="true">·</span>
             <time className="entry__time" dateTime={entry.updatedAt}>
               更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}

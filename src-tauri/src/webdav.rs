@@ -342,6 +342,7 @@ mod tests {
             webdav_password: "secret".to_owned(),
             webdav_enabled: enabled,
             last_synced_at: None,
+            theme: "system".to_owned(),
             library_view: "list".to_owned(),
         }
     }

@@ -35,6 +35,7 @@ import {
   MEDIA_TYPE_LABELS,
   MEDIA_TYPE_UNITS,
   PLATFORM_PRESETS,
+  THEME_LABELS,
   type AppSettings,
   type EntryInput,
   type ImportReport,
@@ -43,6 +44,7 @@ import {
   type MediaType,
   type ScrapeCandidate,
   type SyncReport,
+  type ThemeMode,
 } from "./types";
 
 type LibraryState =
@@ -1556,6 +1558,41 @@ function SettingsDialog({
             </p>
           ) : null}
 
+          <section
+            className="settings-section"
+            aria-labelledby="settings-appearance-heading"
+          >
+            <div className="settings-section__heading">
+              <h3 id="settings-appearance-heading">外观</h3>
+              <p>选择应用主题；列表/网格布局在内容库顶部工具栏切换。</p>
+            </div>
+            <div className="settings-section__fields">
+              <div className="form-field">
+                <label htmlFor="settings-theme-group">主题</label>
+                <div
+                  id="settings-theme-group"
+                  className="layout-toggle"
+                  role="group"
+                  aria-label="主题"
+                >
+                  {(Object.keys(THEME_LABELS) as ThemeMode[]).map(
+                    (themeKey) => (
+                      <button
+                        key={themeKey}
+                        className="layout-toggle__option"
+                        type="button"
+                        aria-pressed={values.theme === themeKey}
+                        onClick={() => changeValue("theme", themeKey)}
+                      >
+                        {THEME_LABELS[themeKey]}
+                      </button>
+                    ),
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section className="settings-section" aria-labelledby="settings-tmdb-heading">
             <div className="settings-section__heading">
               <h3 id="settings-tmdb-heading">TMDB 元数据</h3>
@@ -2886,6 +2923,40 @@ function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    function applyTheme() {
+      const resolved: "light" | "dark" =
+        settings.theme === "system"
+          ? media.matches
+            ? "dark"
+            : "light"
+          : settings.theme;
+      document.documentElement.dataset.theme = resolved;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) {
+        meta.setAttribute(
+          "content",
+          resolved === "dark" ? "#15171c" : "#f4f6ef",
+        );
+      }
+      if ("__TAURI_INTERNALS__" in window) {
+        import("@tauri-apps/api/window")
+          .then(({ getCurrentWindow }) =>
+            getCurrentWindow().setTheme(
+              settings.theme === "system" ? null : resolved,
+            ),
+          )
+          .catch(() => {
+            // 原生标题栏主题同步失败不阻塞界面渲染。
+          });
+      }
+    }
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [settings.theme]);
 
   const isTrashView = view === "trash";
   const normalizedTitleQuery = titleQuery.trim().toLowerCase();

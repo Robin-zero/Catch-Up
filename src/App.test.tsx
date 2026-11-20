@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setSystemPrefersDark } from "./test/setup";
 import {
   adjustProgress,
   createEntry,
@@ -2064,6 +2065,7 @@ describe("设置中心", () => {
       webdavPassword: "secret",
       webdavEnabled: true,
       lastSyncedAt: "2026-11-01T08:00:00.000Z",
+      theme: "dark",
       libraryView: "grid",
     });
     const user = userEvent.setup();
@@ -2087,6 +2089,12 @@ describe("设置中心", () => {
     expect(within(dialog).getByLabelText("上次同步")).not.toHaveValue(
       "尚未同步",
     );
+    expect(
+      within(dialog).getByRole("button", { name: "深色" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(dialog).getByRole("button", { name: "浅色" }),
+    ).toHaveAttribute("aria-pressed", "false");
     const mobileButton = screen
       .getAllByRole("button", { name: "设置" })
       .find((button) => button.classList.contains("topbar__settings-button"));
@@ -2537,5 +2545,100 @@ describe("TMDB 元数据刮削", () => {
       ),
     ).toBeInTheDocument();
     expect(within(scrape).getByRole("button", { name: "搜索" })).toBeEnabled();
+  });
+});
+
+describe("外观与布局", () => {
+  beforeEach(() => {
+    mockedSaveSettings.mockImplementation(async (settings) => settings);
+  });
+
+  function libraryList() {
+    return screen.getByRole("list", { name: "追更内容列表" });
+  }
+
+  function ensureThemeMeta() {
+    const existing = document.querySelector('meta[name="theme-color"]');
+    const meta = existing ?? document.createElement("meta");
+    if (!existing) {
+      meta.setAttribute("name", "theme-color");
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute("content", "#f4f6ef");
+    return meta;
+  }
+
+  it("默认列表布局，切换网格后切换 class 并持久化 libraryView", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([makeEntry({ id: "a", title: "A" })]);
+    render(<App />);
+    await screen.findByRole("article", { name: "A" });
+
+    expect(libraryList()).toHaveClass("entry-list");
+    expect(libraryList()).not.toHaveClass("entry-list--grid");
+
+    await user.click(screen.getByRole("button", { name: "网格" }));
+    expect(libraryList()).toHaveClass("entry-list--grid");
+    await waitFor(() =>
+      expect(mockedSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ libraryView: "grid" }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "列表" }));
+    expect(libraryList()).not.toHaveClass("entry-list--grid");
+    await waitFor(() =>
+      expect(mockedSaveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ libraryView: "list" }),
+      ),
+    );
+  });
+
+  it("回收站视图不显示布局切换", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([makeEntry({ id: "a", title: "A" })]);
+    render(<App />);
+    await screen.findByRole("article", { name: "A" });
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(within(sidebar).getByRole("button", { name: /回收站/ }));
+    expect(screen.queryByRole("button", { name: "网格" })).toBeNull();
+  });
+
+  it("跟随系统主题会同步 document 与 meta theme-color", async () => {
+    const meta = ensureThemeMeta();
+    mockedListEntries.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(meta).toHaveAttribute("content", "#f4f6ef");
+
+    setSystemPrefersDark(true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(meta).toHaveAttribute("content", "#15171c");
+
+    setSystemPrefersDark(false);
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("在设置中切换深色主题并保存后应用暗色且保留 libraryView", async () => {
+    const user = userEvent.setup();
+    mockedListEntries.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    await user.click(within(sidebar).getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("button", { name: "深色" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() =>
+      expect(document.documentElement.dataset.theme).toBe("dark"),
+    );
+    expect(mockedSaveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: "dark", libraryView: "list" }),
+    );
   });
 });

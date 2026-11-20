@@ -8,6 +8,7 @@ export type MediaType =
 
 export type EntryStatus = "tracking" | "completed" | "dropped" | "to_watch";
 
+export type ThemeMode = "system" | "light" | "dark";
 
 export type LibraryView = "list" | "grid";
 
@@ -48,6 +49,7 @@ export interface AppSettings {
   webdavPassword: string;
   webdavEnabled: boolean;
   lastSyncedAt: string | null;
+  theme: ThemeMode;
   libraryView: LibraryView;
 }
 
@@ -58,6 +60,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webdavPassword: "",
   webdavEnabled: false,
   lastSyncedAt: null,
+  theme: "system",
   libraryView: "list",
 };
 
@@ -110,6 +113,11 @@ export const ENTRY_STATUS_LABELS: Record<EntryStatus, string> = {
   to_watch: "待看",
 };
 
+export const THEME_LABELS: Record<ThemeMode, string> = {
+  system: "跟随系统",
+  light: "浅色",
+  dark: "深色",
+};
 
 export const LAYOUT_LABELS: Record<LibraryView, string> = {
   list: "列表",

@@ -20,8 +20,7 @@
         "minHeight": 520,
         "center": true,
         "resizable": true,
-        "fullscreen": false,
-        "theme": "Light"
+        "fullscreen": false
       }
     ],
     "security": {

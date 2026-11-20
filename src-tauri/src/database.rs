@@ -11,7 +11,7 @@ use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, Transact
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::settings::{normalize_library_view, AppSettings};
+use crate::settings::{normalize_library_view, normalize_theme, AppSettings};
 
 const DATABASE_VERSION: u32 = 5;
 const TRASH_RETENTION_DAYS: i64 = 30;
@@ -1085,6 +1085,7 @@ impl Database {
                 .get("last_synced_at")
                 .filter(|value| !value.trim().is_empty())
                 .cloned(),
+            theme: normalize_theme(&text("theme")),
             library_view: normalize_library_view(&text("library_view")),
         })
     }
@@ -1104,6 +1105,7 @@ impl Database {
             ("webdav_password", settings.webdav_password.as_str()),
             ("webdav_enabled", webdav_enabled),
             ("last_synced_at", last_synced_at),
+            ("theme", settings.theme.as_str()),
             ("library_view", settings.library_view.as_str()),
         ];
 
@@ -2785,6 +2787,7 @@ mod tests {
         assert_eq!(settings.webdav_password, "");
         assert!(!settings.webdav_enabled);
         assert_eq!(settings.last_synced_at, None);
+        assert_eq!(settings.theme, "system");
         assert_eq!(settings.library_view, "list");
     }
 
@@ -2802,6 +2805,7 @@ mod tests {
                     webdav_password: " secret ".to_owned(),
                     webdav_enabled: true,
                     last_synced_at: Some(" 2026-11-20T00:00:00.000Z ".to_owned()),
+                    theme: "  dark ".to_owned(),
                     library_view: "grid".to_owned(),
                 })
                 .unwrap()
@@ -2815,6 +2819,7 @@ mod tests {
             saved.last_synced_at.as_deref(),
             Some("2026-11-20T00:00:00.000Z")
         );
+        assert_eq!(saved.theme, "dark");
         assert_eq!(saved.library_view, "grid");
 
         let reopened = Database::open(&path).unwrap();
@@ -2928,6 +2933,7 @@ mod tests {
 
         let database = Database::open(&path).unwrap();
         let expected_defaults = AppSettings {
+            theme: "system".to_owned(),
             library_view: "list".to_owned(),
             ..AppSettings::default()
         };

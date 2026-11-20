@@ -15,6 +15,8 @@ pub struct AppSettings {
     pub webdav_password: String,
     pub webdav_enabled: bool,
     pub last_synced_at: Option<String>,
+    /// 主题模式：system / light / dark。
+    pub theme: String,
     /// 内容库布局：list / grid。
     pub library_view: String,
 }
@@ -68,6 +70,7 @@ impl AppSettings {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
 
+        let theme = normalize_theme(&self.theme);
         let library_view = normalize_library_view(&self.library_view);
 
         Ok(Self {
@@ -77,8 +80,17 @@ impl AppSettings {
             webdav_password: self.webdav_password,
             webdav_enabled: self.webdav_enabled,
             last_synced_at,
+            theme,
             library_view,
         })
+    }
+}
+
+pub(crate) fn normalize_theme(raw: &str) -> String {
+    match raw.trim() {
+        "light" => "light".to_owned(),
+        "dark" => "dark".to_owned(),
+        _ => "system".to_owned(),
     }
 }
 

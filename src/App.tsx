@@ -13,10 +13,11 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  downloadExcelTemplate,
   emptyTrash,
   getLibraryErrorMessage,
   getSettings,
-  importMarkdown,
+  importExcel,
   listEntries,
   listTrash,
   purgeEntry,
@@ -490,6 +491,33 @@ function getWriteErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("读取文件失败"));
+        return;
+      }
+      const commaIndex = result.indexOf(",");
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function triggerBase64Download(base64: string, filename: string): void {
+  const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`;
+  const anchor = document.createElement("a");
+  anchor.href = dataUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function EntryFormDialog({
@@ -1219,7 +1247,7 @@ function ConfirmActionDialog({
   );
 }
 
-function ImportMarkdownDialog({
+function ImportExcelDialog({
   fallbackFocusRef,
   onClose,
   onImported,
@@ -1228,24 +1256,44 @@ function ImportMarkdownDialog({
   onClose: () => void;
   onImported: () => void;
 }) {
-  const [markdown, setMarkdown] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [dataBase64, setDataBase64] = useState<string | null>(null);
   const [defaultMediaType, setDefaultMediaType] = useState<MediaType>("drama");
   const [report, setReport] = useState<ImportReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const importingRef = useRef(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const titleId = "import-markdown-title";
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleId = "import-excel-title";
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      const base64 = await readFileAsBase64(file);
+      setFileName(file.name);
+      setDataBase64(base64);
+      setReport(null);
+      setError(null);
+    } catch {
+      setError("读取文件失败，请重试。");
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (importingRef.current) {
       return;
     }
-    if (!markdown.trim()) {
+    if (!dataBase64) {
       setReport(null);
-      setError("请先粘贴 Markdown 内容，或选择一个本地文件。");
-      textareaRef.current?.focus();
+      setError("请先选择一个 Excel 或 CSV 文件。");
+      fileInputRef.current?.focus();
       return;
     }
 
@@ -1254,7 +1302,7 @@ function ImportMarkdownDialog({
     setReport(null);
     setError(null);
     try {
-      const result = await importMarkdown(markdown, defaultMediaType);
+      const result = await importExcel(dataBase64, defaultMediaType);
       setReport(result);
       onImported();
     } catch (importError) {
@@ -1265,30 +1313,28 @@ function ImportMarkdownDialog({
     }
   }
 
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) {
+  async function handleDownloadTemplate() {
+    if (downloadingTemplate) {
       return;
     }
-
+    setDownloadingTemplate(true);
+    setError(null);
     try {
-      const text = await file.text();
-      setMarkdown(text);
-      setReport(null);
-      setError(null);
-      textareaRef.current?.focus();
+      const base64 = await downloadExcelTemplate();
+      triggerBase64Download(base64, "追更导入模板.xlsx");
     } catch {
-      setError("读取本地文件失败，请重试。");
+      setError("下载模板失败，请重试。");
+    } finally {
+      setDownloadingTemplate(false);
     }
   }
 
   return (
     <Dialog
-      title="导入 Markdown"
+      title="导入 Excel"
       titleId={titleId}
       busy={importing}
-      initialFocusRef={textareaRef}
+      initialFocusRef={fileInputRef}
       fallbackFocusRef={fallbackFocusRef}
       onClose={onClose}
       className="dialog--import"
@@ -1296,21 +1342,11 @@ function ImportMarkdownDialog({
       <form className="import-form" noValidate onSubmit={handleSubmit}>
         <div className="dialog__body">
           <div className="import-help">
-            <p>每行一个条目，支持两种格式：</p>
+            <p>支持 .xlsx / .xls / .csv 文件。</p>
             <p>
-              <strong>模板</strong>：{" "}
-              <code>标题 | 类型 | 第N季 | 当前/总 | 平台 | 评分</code>
+              建议先<strong>下载模板</strong>，按列填写标题、类型、季、当前进度、总进度、平台与评分后再导入。
             </p>
-            <pre className="import-example">
-              {"庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6"}
-            </pre>
-            <p>
-              <strong>普通清单</strong>：直接粘贴列表，自动识别季、进度、平台和评分。
-            </p>
-            <pre className="import-example">
-              {"- 漫长的季节 3/12 腾讯视频 9.4分\n- 怪奇物语 第4季 3/9 Netflix 8.7分"}
-            </pre>
-            <p className="import-help__hint">空行与以 # 开头的行会被忽略。</p>
+            <p className="import-help__hint">未标明类型的行将使用下方默认类型。</p>
           </div>
 
           {error ? (
@@ -1321,32 +1357,19 @@ function ImportMarkdownDialog({
 
           <fieldset className="import-form__fields" disabled={importing}>
             <div className="form-field">
-              <label htmlFor="import-markdown-text">Markdown 内容</label>
-              <textarea
-                id="import-markdown-text"
-                className="import-textarea"
-                rows={9}
-                value={markdown}
-                placeholder={"粘贴 Markdown 清单，或从下方选择本地文件"}
-                ref={textareaRef}
-                onChange={(event) => {
-                  setMarkdown(event.target.value);
-                  setReport(null);
-                  setError(null);
-                }}
-              />
-            </div>
-
-            <div className="form-field">
-              <label htmlFor="import-markdown-file">从本地文件读取</label>
+              <label htmlFor="import-excel-file">选择文件</label>
               <input
-                id="import-markdown-file"
+                id="import-excel-file"
+                ref={fileInputRef}
                 type="file"
-                accept=".md,.markdown,text/markdown,text/plain"
+                accept=".xlsx,.xls,.csv"
                 onChange={(event) => {
                   void handleFileChange(event);
                 }}
               />
+              {fileName ? (
+                <p className="field-hint">已选择：{fileName}</p>
+              ) : null}
             </div>
 
             <div className="form-field">
@@ -1364,8 +1387,19 @@ function ImportMarkdownDialog({
                   </option>
                 ))}
               </select>
-              <p className="field-hint">清单中未标明类型时使用</p>
+              <p className="field-hint">文件中未标明类型时使用</p>
             </div>
+
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                void handleDownloadTemplate();
+              }}
+              disabled={downloadingTemplate}
+            >
+              {downloadingTemplate ? "下载中…" : "下载模板"}
+            </button>
           </fieldset>
 
           {report ? (
@@ -1396,7 +1430,11 @@ function ImportMarkdownDialog({
           >
             关闭
           </button>
-          <button className="primary-button" type="submit" disabled={importing}>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={importing || !dataBase64}
+          >
             {importing ? "导入中…" : "开始导入"}
           </button>
         </div>
@@ -2076,13 +2114,13 @@ function Sidebar({
         <button
           className="sidebar__import"
           type="button"
-          aria-label="导入 Markdown"
+          aria-label="导入 Excel"
           onClick={onImport}
         >
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
           </svg>
-          <span>导入 Markdown</span>
+          <span>导入 Excel</span>
         </button>
         <button
           className="sidebar__import sidebar__settings"
@@ -3061,7 +3099,7 @@ function App() {
             <button
               className="icon-button topbar__import-button"
               type="button"
-              aria-label="导入 Markdown"
+              aria-label="导入 Excel"
               onClick={() => setImportOpen(true)}
             >
               <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -3340,7 +3378,7 @@ function App() {
         />
       ) : null}
       {importOpen ? (
-        <ImportMarkdownDialog
+        <ImportExcelDialog
           fallbackFocusRef={addButtonRef}
           onClose={() => setImportOpen(false)}
           onImported={() => {

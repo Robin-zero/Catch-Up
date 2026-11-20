@@ -322,51 +322,7 @@ fn optional_trimmed(
     }
 }
 
-const IMPORT_PLATFORM_KEYWORDS: [&str; 7] = [
-    "腾讯视频",
-    "爱奇艺",
-    "优酷",
-    "芒果TV",
-    "哔哩哔哩",
-    "红果短剧",
-    "Netflix",
-];
-
-const IMPORT_TYPE_KEYWORDS: [(&str, MediaType); 9] = [
-    ("短剧", MediaType::ShortDrama),
-    ("电视剧", MediaType::Drama),
-    ("剧集", MediaType::Drama),
-    ("番剧", MediaType::Anime),
-    ("动漫", MediaType::Anime),
-    ("动画", MediaType::Anime),
-    ("综艺", MediaType::Variety),
-    ("小说", MediaType::Novel),
-    ("电影", MediaType::Movie),
-];
-
-fn strip_list_prefix(line: &str) -> &str {
-    let trimmed = line.trim();
-    for prefix in ["- ", "* ", "+ "] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            return rest.trim();
-        }
-    }
-
-    let digits_end = trimmed
-        .char_indices()
-        .take_while(|(_, character)| character.is_ascii_digit())
-        .last()
-        .map(|(index, character)| index + character.len_utf8());
-    if let Some(digits_end) = digits_end {
-        if let Some(rest) = trimmed[digits_end..].strip_prefix(". ") {
-            return rest.trim();
-        }
-    }
-
-    trimmed
-}
-
-fn parse_media_type_field(raw: &str) -> Result<MediaType, String> {
+pub(crate) fn parse_media_type_field(raw: &str) -> Result<MediaType, String> {
     match raw.trim() {
         "drama" | "剧集" | "电视剧" => Ok(MediaType::Drama),
         "anime" | "番剧" | "动漫" | "动画" => Ok(MediaType::Anime),
@@ -378,8 +334,12 @@ fn parse_media_type_field(raw: &str) -> Result<MediaType, String> {
     }
 }
 
-fn parse_optional_count(raw: &str, field: &str) -> Result<Option<i64>, String> {
-    let cleaned = raw.trim().trim_end_matches(['集', '章', '部']).trim();
+pub(crate) fn parse_optional_count(raw: &str, field: &str) -> Result<Option<i64>, String> {
+    let cleaned = raw
+        .trim()
+        .trim_start_matches('第')
+        .trim_end_matches(['集', '章', '部'])
+        .trim();
     if cleaned.is_empty() {
         return Ok(None);
     }
@@ -389,7 +349,7 @@ fn parse_optional_count(raw: &str, field: &str) -> Result<Option<i64>, String> {
         .map_err(|_| format!("{field}格式不正确"))
 }
 
-fn parse_optional_season(raw: &str) -> Result<Option<u32>, String> {
+pub(crate) fn parse_optional_season(raw: &str) -> Result<Option<u32>, String> {
     let cleaned = raw.trim();
     let cleaned = cleaned.strip_prefix('第').unwrap_or(cleaned).trim();
     let cleaned = cleaned.strip_suffix('季').unwrap_or(cleaned).trim();
@@ -402,7 +362,7 @@ fn parse_optional_season(raw: &str) -> Result<Option<u32>, String> {
         .map_err(|_| "季数格式不正确".to_owned())
 }
 
-fn parse_optional_rating(raw: &str) -> Result<Option<f64>, String> {
+pub(crate) fn parse_optional_rating(raw: &str) -> Result<Option<f64>, String> {
     let cleaned = raw.trim().trim_end_matches('分').trim();
     if cleaned.is_empty() {
         return Ok(None);
@@ -413,7 +373,7 @@ fn parse_optional_rating(raw: &str) -> Result<Option<f64>, String> {
         .map_err(|_| "评分格式不正确".to_owned())
 }
 
-fn parse_progress_field(raw: &str) -> Result<(i64, Option<i64>), String> {
+pub(crate) fn parse_progress_field(raw: &str) -> Result<(i64, Option<i64>), String> {
     match raw.split_once('/') {
         Some((current, total)) => {
             let current = parse_optional_count(current, "当前进度")?.unwrap_or(0);
@@ -421,311 +381,6 @@ fn parse_progress_field(raw: &str) -> Result<(i64, Option<i64>), String> {
             Ok((current, total))
         }
         None => Ok((parse_optional_count(raw, "当前进度")?.unwrap_or(0), None)),
-    }
-}
-
-fn parse_template_line(content: &str, default_media_type: MediaType) -> Result<EntryInput, String> {
-    let fields = content.split('|').map(str::trim).collect::<Vec<_>>();
-    let title = fields.first().copied().unwrap_or_default().trim();
-    if title.is_empty() {
-        return Err("标题不能为空".to_owned());
-    }
-
-    let media_type = match fields.get(1).copied().filter(|value| !value.is_empty()) {
-        Some(value) => parse_media_type_field(value)?,
-        None => default_media_type,
-    };
-    let season = fields
-        .get(2)
-        .map(|value| parse_optional_season(value))
-        .transpose()?
-        .flatten();
-    let (current_progress, total_progress) = fields
-        .get(3)
-        .map(|value| parse_progress_field(value))
-        .transpose()?
-        .unwrap_or((0, None));
-    let platform = fields
-        .get(4)
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let rating = fields
-        .get(5)
-        .map(|value| parse_optional_rating(value))
-        .transpose()?
-        .flatten();
-
-    Ok(EntryInput {
-        title: title.to_owned(),
-        media_type,
-        current_progress,
-        total_progress,
-        status: EntryStatus::Tracking,
-        season,
-        rating,
-        platform,
-        cover_url: None,
-        overview: None,
-    })
-}
-
-fn skip_whitespace(chars: &[char], mut index: usize) -> usize {
-    while index < chars.len() && chars[index].is_whitespace() {
-        index += 1;
-    }
-    index
-}
-
-fn parse_digits_at(chars: &[char], index: usize) -> Option<(u64, usize)> {
-    let start = skip_whitespace(chars, index);
-    let mut end = start;
-    while end < chars.len() && chars[end].is_ascii_digit() {
-        end += 1;
-    }
-    if end == start {
-        return None;
-    }
-    let value = chars[start..end].iter().collect::<String>().parse().ok()?;
-    Some((value, end))
-}
-
-fn extract_season(chars: &mut Vec<char>) -> Option<u32> {
-    let mut index = 0;
-    while index < chars.len() {
-        if chars[index] == '第' {
-            if let Some((value, after_digits)) = parse_digits_at(chars, index + 1) {
-                let end = skip_whitespace(chars, after_digits);
-                if chars.get(end) == Some(&'季') {
-                    chars.drain(index..=end);
-                    return u32::try_from(value).ok();
-                }
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn extract_episode(chars: &mut Vec<char>) -> Option<i64> {
-    let mut index = 0;
-    while index < chars.len() {
-        if chars[index] == '第' {
-            if let Some((value, after_digits)) = parse_digits_at(chars, index + 1) {
-                let end = skip_whitespace(chars, after_digits);
-                if chars
-                    .get(end)
-                    .is_some_and(|character| matches!(character, '集' | '章' | '部'))
-                {
-                    chars.drain(index..=end);
-                    return i64::try_from(value).ok();
-                }
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn extract_ratio(chars: &mut Vec<char>) -> Option<(i64, Option<i64>)> {
-    let mut index = 0;
-    while index < chars.len() {
-        let starts_number =
-            chars[index].is_ascii_digit() && (index == 0 || !chars[index - 1].is_ascii_digit());
-        if starts_number {
-            if let Some((current, after_current)) = parse_digits_at(chars, index) {
-                let slash = skip_whitespace(chars, after_current);
-                if chars.get(slash) == Some(&'/') {
-                    if let Some((total, after_total)) = parse_digits_at(chars, slash + 1) {
-                        chars.drain(index..after_total);
-                        return Some((i64::try_from(current).ok()?, i64::try_from(total).ok()));
-                    }
-                }
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn extract_rating(chars: &mut Vec<char>) -> Option<f64> {
-    let mut index = 0;
-    while index < chars.len() {
-        let starts_number =
-            chars[index].is_ascii_digit() && (index == 0 || !chars[index - 1].is_ascii_digit());
-        if starts_number {
-            if let Some((integer, after_integer)) = parse_digits_at(chars, index) {
-                let mut end = after_integer;
-                let mut raw = integer.to_string();
-                if chars.get(end) == Some(&'.')
-                    && chars.get(end + 1).is_some_and(char::is_ascii_digit)
-                {
-                    let fraction_end = skip_whitespace(chars, end + 1);
-                    let mut digits_end = fraction_end;
-                    while digits_end < chars.len() && chars[digits_end].is_ascii_digit() {
-                        digits_end += 1;
-                    }
-                    raw.push('.');
-                    raw.extend(chars[fraction_end..digits_end].iter());
-                    end = digits_end;
-                }
-                let unit = skip_whitespace(chars, end);
-                if chars.get(unit) == Some(&'分') {
-                    let rating = raw.parse::<f64>().ok()?;
-                    chars.drain(index..=unit);
-                    return Some(rating);
-                }
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn chars_equal_ignore_ascii_case(left: char, right: char) -> bool {
-    left.eq_ignore_ascii_case(&right)
-}
-
-fn find_keyword(chars: &[char], keyword: &str) -> Option<(usize, usize)> {
-    let keyword = keyword.chars().collect::<Vec<_>>();
-    if keyword.is_empty() || keyword.len() > chars.len() {
-        return None;
-    }
-    (0..=chars.len() - keyword.len()).find_map(|start| {
-        keyword
-            .iter()
-            .enumerate()
-            .all(|(offset, expected)| {
-                chars_equal_ignore_ascii_case(chars[start + offset], *expected)
-            })
-            .then_some((start, start + keyword.len()))
-    })
-}
-
-fn extract_platform(chars: &mut Vec<char>) -> Option<String> {
-    let mut matched = IMPORT_PLATFORM_KEYWORDS
-        .iter()
-        .filter_map(|keyword| {
-            find_keyword(chars, keyword).map(|(start, end)| (start, end, *keyword))
-        })
-        .collect::<Vec<_>>();
-    matched.sort_by_key(|(start, _, _)| *start);
-    let (start, end, keyword) = matched.into_iter().next()?;
-    chars.drain(start..end);
-    Some(keyword.to_owned())
-}
-
-fn infer_media_type(chars: &mut Vec<char>) -> Option<MediaType> {
-    let mut matched = IMPORT_TYPE_KEYWORDS
-        .iter()
-        .filter_map(|(keyword, media_type)| {
-            find_keyword(chars, keyword).map(|(start, end)| (start, end, *keyword, *media_type))
-        })
-        .collect::<Vec<_>>();
-    matched.sort_by_key(|(start, _, _, _)| *start);
-    let media_type = matched.first().map(|(_, _, _, media_type)| *media_type)?;
-
-    for (keyword, _) in IMPORT_TYPE_KEYWORDS {
-        while let Some((start, end)) = find_keyword(chars, keyword) {
-            chars.drain(start..end);
-        }
-    }
-    Some(media_type)
-}
-
-fn clean_title(chars: Vec<char>) -> String {
-    let raw = chars.into_iter().collect::<String>();
-    let trimmed = raw.trim();
-    let mut cleaned = String::with_capacity(trimmed.len());
-    let mut previous_space = false;
-    for character in trimmed.chars() {
-        if character.is_whitespace() {
-            if !previous_space {
-                cleaned.push(' ');
-            }
-            previous_space = true;
-        } else {
-            cleaned.push(character);
-            previous_space = false;
-        }
-    }
-
-    for empty_pair in ["（）", "()", "【】", "[]", "《》"] {
-        while cleaned.contains(empty_pair) {
-            cleaned = cleaned.replace(empty_pair, "");
-        }
-    }
-
-    cleaned
-        .trim_matches(|character: char| {
-            character.is_whitespace()
-                || matches!(
-                    character,
-                    '·' | '|'
-                        | '/'
-                        | '\\'
-                        | ','
-                        | '，'
-                        | '、'
-                        | ';'
-                        | '；'
-                        | '-'
-                        | '–'
-                        | '—'
-                        | '_'
-                        | '~'
-                        | '('
-                        | ')'
-                        | '（'
-                        | '）'
-                        | '['
-                        | ']'
-                        | '【'
-                        | '】'
-                )
-        })
-        .to_owned()
-}
-
-fn parse_heuristic_line(
-    content: &str,
-    default_media_type: MediaType,
-) -> Result<EntryInput, String> {
-    let mut chars = content.chars().collect::<Vec<_>>();
-    let season = extract_season(&mut chars);
-    let ratio = extract_ratio(&mut chars);
-    let episode = extract_episode(&mut chars);
-    let rating = extract_rating(&mut chars);
-    let platform = extract_platform(&mut chars);
-    let media_type = infer_media_type(&mut chars).unwrap_or(default_media_type);
-    let title = clean_title(chars);
-    if title.is_empty() {
-        return Err("标题不能为空".to_owned());
-    }
-
-    Ok(EntryInput {
-        title,
-        media_type,
-        current_progress: ratio.map_or(episode.unwrap_or(0), |(current, _)| current),
-        total_progress: ratio.and_then(|(_, total)| total),
-        status: EntryStatus::Tracking,
-        season,
-        rating,
-        platform,
-        cover_url: None,
-        overview: None,
-    })
-}
-
-fn parse_import_line(line: &str, default_media_type: MediaType) -> Result<EntryInput, String> {
-    let content = strip_list_prefix(line);
-    if content.is_empty() {
-        return Err("标题不能为空".to_owned());
-    }
-    if content.contains('|') {
-        parse_template_line(content, default_media_type)
-    } else {
-        parse_heuristic_line(content, default_media_type)
     }
 }
 
@@ -967,31 +622,21 @@ impl Database {
         Ok(entry)
     }
 
-    pub fn import_markdown(
+    pub fn import_excel(
         &self,
-        markdown: &str,
+        base64_data: &str,
         default_media_type: Option<MediaType>,
     ) -> Result<ImportReport, String> {
+        let bytes = crate::excel::decode_base64(base64_data)?;
         let default_media_type = default_media_type.unwrap_or(MediaType::Drama);
-        let mut parsed = Vec::new();
+        let rows = crate::excel::parse_workbook(&bytes, default_media_type)?;
+
+        let mut candidates = Vec::new();
         let mut errors = Vec::new();
         let mut skipped = 0u32;
-
-        for (index, raw_line) in markdown.lines().enumerate() {
-            let line_number = index + 1;
-            let trimmed = raw_line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            match parse_import_line(trimmed, default_media_type) {
-                Ok(input) => match input.validate() {
-                    Ok(validated) => parsed.push((line_number, validated)),
-                    Err(error) => {
-                        skipped += 1;
-                        errors.push(format!("第 {line_number} 行：{error}"));
-                    }
-                },
+        for (line_number, parsed) in rows {
+            match parsed.and_then(|input| input.validate()) {
+                Ok(validated) => candidates.push((line_number, validated)),
                 Err(error) => {
                     skipped += 1;
                     errors.push(format!("第 {line_number} 行：{error}"));
@@ -999,14 +644,25 @@ impl Database {
             }
         }
 
+        self.insert_imported(candidates, skipped, errors)
+    }
+
+    fn insert_imported(
+        &self,
+        candidates: Vec<(usize, ValidatedInput)>,
+        initial_skipped: u32,
+        initial_errors: Vec<String>,
+    ) -> Result<ImportReport, String> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动导入事务：{error}"))?;
         let mut entries = Vec::new();
         let mut seen = HashSet::new();
+        let mut skipped = initial_skipped;
+        let mut errors = initial_errors;
 
-        for (line_number, input) in parsed {
+        for (line_number, input) in candidates {
             let key = (
                 input.title.clone(),
                 input.media_type.as_str().to_owned(),
@@ -2895,12 +2551,54 @@ mod tests {
         assert_eq!(database.list_trash().unwrap().len(), 1);
     }
 
+    fn excel_base64(rows: &[&[&str]]) -> String {
+        use base64::{engine::general_purpose, Engine as _};
+        use rust_xlsxwriter::Workbook;
+
+        let mut workbook = Workbook::new();
+        let worksheet = workbook.add_worksheet();
+        for (row_index, row) in rows.iter().enumerate() {
+            for (column, value) in row.iter().enumerate() {
+                worksheet
+                    .write_string(row_index as u32, column as u16, *value)
+                    .unwrap();
+            }
+        }
+        general_purpose::STANDARD.encode(workbook.save_to_buffer().unwrap())
+    }
+
     #[test]
-    fn import_parses_complete_template_and_optional_fields() {
+    fn import_excel_parses_header_mapped_workbook() {
         let (_directory, database) = test_database();
         let report = database
-            .import_markdown(
-                "# 我的追更清单\n\n庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6\n无名之剧 |  |  |  |  |\n",
+            .import_excel(
+                &excel_base64(&[
+                    &[
+                        "标题",
+                        "类型",
+                        "季",
+                        "当前进度",
+                        "总进度",
+                        "状态",
+                        "平台",
+                        "评分",
+                        "封面",
+                        "简介",
+                    ],
+                    &[
+                        "庆余年",
+                        "剧集",
+                        "2",
+                        "3",
+                        "36",
+                        "在追",
+                        "腾讯视频",
+                        "8.6",
+                        "https://example.com/a.jpg",
+                        "简介",
+                    ],
+                    &["待看的新剧", "", "", "", "", "待看", "", "", "", ""],
+                ]),
                 None,
             )
             .unwrap();
@@ -2908,163 +2606,78 @@ mod tests {
         assert_eq!(report.imported, 2);
         assert_eq!(report.skipped, 0);
         assert!(report.errors.is_empty());
-        assert_eq!(report.entries.len(), 2);
 
-        let entry = &report.entries[0];
-        assert_eq!(entry.title, "庆余年");
-        assert_eq!(entry.media_type, MediaType::Drama);
-        assert_eq!(entry.season, Some(2));
-        assert_eq!(entry.current_progress, 3);
-        assert_eq!(entry.total_progress, Some(36));
-        assert_eq!(entry.platform.as_deref(), Some("腾讯视频"));
-        assert_eq!(entry.rating, Some(8.6));
-        assert_eq!(entry.status, EntryStatus::Tracking);
-        assert!(Uuid::parse_str(&entry.id).is_ok());
+        let first = &report.entries[0];
+        assert_eq!(first.title, "庆余年");
+        assert_eq!(first.media_type, MediaType::Drama);
+        assert_eq!(first.season, Some(2));
+        assert_eq!(first.current_progress, 3);
+        assert_eq!(first.total_progress, Some(36));
+        assert_eq!(first.status, EntryStatus::Tracking);
+        assert_eq!(first.platform.as_deref(), Some("腾讯视频"));
+        assert_eq!(first.rating, Some(8.6));
+        assert_eq!(
+            first.cover_url.as_deref(),
+            Some("https://example.com/a.jpg")
+        );
+        assert_eq!(first.overview.as_deref(), Some("简介"));
 
-        let defaults = &report.entries[1];
-        assert_eq!(defaults.title, "无名之剧");
-        assert_eq!(defaults.media_type, MediaType::Drama);
-        assert_eq!(defaults.season, None);
-        assert_eq!(defaults.current_progress, 0);
-        assert_eq!(defaults.total_progress, None);
-        assert_eq!(defaults.platform, None);
-        assert_eq!(defaults.rating, None);
-
-        let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["imported"], json!(2));
-        assert_eq!(value["skipped"], json!(0));
-        assert_eq!(value["errors"], json!([]));
-        assert_eq!(value["entries"][0]["mediaType"], json!("drama"));
-        assert!(value.get("entries").is_some());
+        let second = &report.entries[1];
+        assert_eq!(second.title, "待看的新剧");
+        assert_eq!(second.status, EntryStatus::ToWatch);
+        assert_eq!(second.current_progress, 0);
+        assert_eq!(second.total_progress, None);
     }
 
     #[test]
-    fn import_parses_simple_markdown_lists() {
+    fn import_excel_parses_positional_workbook_without_header() {
         let (_directory, database) = test_database();
         let report = database
-            .import_markdown(
-                "- 漫长的季节\n* 三体\n+ 狂飙\n1. 隐秘的角落\n2) 被忽略的旧式列表\n",
+            .import_excel(
+                &excel_base64(&[
+                    &["漫长的季节", "剧集", "", "3/12", "腾讯视频", "9.4"],
+                    &["诡秘之主", "小说", "", "第12章", "", "9.1"],
+                ]),
                 None,
             )
             .unwrap();
-
-        assert_eq!(report.imported, 5);
-        assert_eq!(report.skipped, 0);
-        let titles = report
-            .entries
-            .iter()
-            .map(|entry| entry.title.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec![
-                "漫长的季节",
-                "三体",
-                "狂飙",
-                "隐秘的角落",
-                "2) 被忽略的旧式列表"
-            ]
-        );
-        assert!(report
-            .entries
-            .iter()
-            .all(|entry| entry.media_type == MediaType::Drama
-                && entry.current_progress == 0
-                && entry.total_progress.is_none()));
-    }
-
-    #[test]
-    fn import_extracts_season_progress_rating_and_platform() {
-        let (_directory, database) = test_database();
-        let report = database
-            .import_markdown(
-                "- 怪奇物语 第4季 3 / 9 Netflix 8.7分\n- 诡秘之主 第12章 9.1分 起点\n",
-                Some(MediaType::Novel),
-            )
-            .unwrap();
-
         assert_eq!(report.imported, 2);
         let drama = &report.entries[0];
-        assert_eq!(drama.title, "怪奇物语");
-        assert_eq!(drama.season, Some(4));
+        assert_eq!(drama.title, "漫长的季节");
         assert_eq!(drama.current_progress, 3);
-        assert_eq!(drama.total_progress, Some(9));
-        assert_eq!(drama.platform.as_deref(), Some("Netflix"));
-        assert_eq!(drama.rating, Some(8.7));
-
+        assert_eq!(drama.total_progress, Some(12));
+        assert_eq!(drama.platform.as_deref(), Some("腾讯视频"));
+        assert_eq!(drama.rating, Some(9.4));
         let novel = &report.entries[1];
-        assert_eq!(novel.title, "诡秘之主 起点");
-        assert_eq!(novel.season, None);
+        assert_eq!(novel.media_type, MediaType::Novel);
         assert_eq!(novel.current_progress, 12);
-        assert_eq!(novel.total_progress, None);
-        assert_eq!(novel.rating, Some(9.1));
     }
 
     #[test]
-    fn import_infers_media_types_from_keywords() {
+    fn import_excel_reports_row_errors_and_keeps_valid_lines() {
         let (_directory, database) = test_database();
         let report = database
-            .import_markdown(
-                "- 我在八零年代当后妈 短剧\n- 三体 电视剧\n- 咒术回战 番剧\n- 斗罗大陆 动漫\n- 喜人奇妙夜 综艺\n- 诡秘之主 小说\n- 流浪地球 电影\n",
+            .import_excel(
+                &excel_base64(&[
+                    &["标题", "评分"],
+                    &["", "8.0"],
+                    &["评分越界", "11"],
+                    &["正常条目", "8.8"],
+                ]),
                 None,
             )
             .unwrap();
-
-        assert_eq!(report.imported, 7);
-        let types = report
-            .entries
-            .iter()
-            .map(|entry| (entry.title.as_str(), entry.media_type))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            types,
-            vec![
-                ("我在八零年代当后妈", MediaType::ShortDrama),
-                ("三体", MediaType::Drama),
-                ("咒术回战", MediaType::Anime),
-                ("斗罗大陆", MediaType::Anime),
-                ("喜人奇妙夜", MediaType::Variety),
-                ("诡秘之主", MediaType::Novel),
-                ("流浪地球", MediaType::Movie),
-            ]
-        );
-    }
-
-    #[test]
-    fn import_reports_missing_titles_per_line() {
-        let (_directory, database) = test_database();
-        let report = database
-            .import_markdown("- 第2季 8.5分\n| 剧集 | 第1季 |\n- 有效条目\n", None)
-            .unwrap();
-
         assert_eq!(report.imported, 1);
         assert_eq!(report.skipped, 2);
         assert_eq!(report.errors.len(), 2);
-        assert!(report.errors[0].starts_with("第 1 行：标题不能为空"));
-        assert!(report.errors[1].starts_with("第 2 行：标题不能为空"));
-        assert_eq!(report.entries[0].title, "有效条目");
-    }
-
-    #[test]
-    fn import_reports_invalid_ratings_and_keeps_other_lines() {
-        let (_directory, database) = test_database();
-        let report = database
-            .import_markdown(
-                "- 评分越界的剧 11分\n某某 | 剧集 |  |  |  | 不是数字\n- 正常条目 8.8分\n",
-                None,
-            )
-            .unwrap();
-
-        assert_eq!(report.imported, 1);
-        assert_eq!(report.skipped, 2);
-        assert!(report.errors[0].contains("评分必须在 0 到 10 之间"));
-        assert!(report.errors[1].contains("评分格式不正确"));
+        assert!(report.errors[0].contains("第 2 行：标题不能为空"));
+        assert!(report.errors[1].contains("评分必须在 0 到 10 之间"));
         assert_eq!(report.entries[0].title, "正常条目");
         assert_eq!(report.entries[0].rating, Some(8.8));
     }
 
     #[test]
-    fn import_skips_duplicates_from_database_and_the_same_batch() {
+    fn import_excel_skips_duplicates() {
         let (_directory, database) = test_database();
         database
             .create_entry(EntryInput {
@@ -3072,93 +2685,98 @@ mod tests {
                 ..input("庆余年")
             })
             .unwrap();
-
         let report = database
-            .import_markdown(
-                "庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6\n\
-                 庆余年 | 剧集 | 第2季 | 4/36\n\
-                 - 漫长的季节\n\
-                 - 漫长的季节\n",
+            .import_excel(
+                &excel_base64(&[
+                    &["标题", "季"],
+                    &["庆余年", "2"],
+                    &["庆余年", "2"],
+                    &["漫长的季节", ""],
+                    &["漫长的季节", ""],
+                ]),
                 None,
             )
             .unwrap();
-
         assert_eq!(report.imported, 1);
         assert_eq!(report.skipped, 3);
         assert_eq!(report.errors.len(), 3);
         assert!(report.errors[0].contains("已存在同名、同类型与季的条目"));
         assert!(report.errors[1].contains("本批次已有相同标题、类型与季的条目"));
         assert!(report.errors[2].contains("本批次已有相同标题、类型与季的条目"));
-        assert_eq!(report.entries[0].title, "漫长的季节");
         assert_eq!(database.list_entries().unwrap().len(), 2);
     }
 
     #[test]
-    fn import_uses_default_media_type_when_missing() {
+    fn import_excel_uses_default_media_type() {
         let (_directory, database) = test_database();
         let with_default = database
-            .import_markdown(
-                "- 无类型内容\n某部漫画 |  | 第1季\n",
+            .import_excel(
+                &excel_base64(&[&["标题"], &["无类型内容"]]),
                 Some(MediaType::Novel),
             )
             .unwrap();
-        assert_eq!(with_default.imported, 2);
-        assert!(with_default
-            .entries
-            .iter()
-            .all(|entry| entry.media_type == MediaType::Novel));
+        assert_eq!(with_default.imported, 1);
+        assert_eq!(with_default.entries[0].media_type, MediaType::Novel);
 
-        let without_default = database.import_markdown("- 另一条内容\n", None).unwrap();
+        let without_default = database
+            .import_excel(&excel_base64(&[&["标题"], &["另一条"]]), None)
+            .unwrap();
         assert_eq!(without_default.entries[0].media_type, MediaType::Drama);
     }
 
     #[test]
-    fn import_returns_document_order_and_persists_completion() {
+    fn import_excel_persists_across_reopens_and_persists_completion() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("catchup.sqlite3");
-        let (report, expected_ids) = {
+        let expected_ids = {
             let database = Database::open(&path).unwrap();
             let report = database
-                .import_markdown("- 第一条\n- 第二条 5/5\n- 第三条\n", None)
+                .import_excel(
+                    &excel_base64(&[
+                        &["标题", "当前进度", "总进度"],
+                        &["第一条", "", ""],
+                        &["第二条", "5", "5"],
+                    ]),
+                    None,
+                )
                 .unwrap();
-            assert_eq!(report.imported, 3);
+            assert_eq!(report.imported, 2);
             assert_eq!(report.entries[1].status, EntryStatus::Completed);
-            let titles = report
-                .entries
-                .iter()
-                .map(|entry| entry.title.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(titles, vec!["第一条", "第二条", "第三条"]);
-            let ids = report
+            report
                 .entries
                 .iter()
                 .map(|entry| entry.id.clone())
-                .collect::<Vec<_>>();
-            (report, ids)
+                .collect::<Vec<_>>()
         };
 
-        assert_eq!(report.skipped, 0);
         let reopened = Database::open(&path).unwrap();
         let stored = reopened.list_entries().unwrap();
-        assert_eq!(stored.len(), 3);
+        assert_eq!(stored.len(), 2);
         let mut stored_ids = stored
             .iter()
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
         stored_ids.sort();
-        let mut expected_ids = expected_ids;
-        expected_ids.sort();
-        assert_eq!(stored_ids, expected_ids);
+        let mut expected = expected_ids;
+        expected.sort();
+        assert_eq!(stored_ids, expected);
         let completed = stored.iter().find(|entry| entry.title == "第二条").unwrap();
         assert_eq!(completed.current_progress, 5);
-        assert_eq!(completed.total_progress, Some(5));
         assert_eq!(completed.status, EntryStatus::Completed);
+    }
+
+    #[test]
+    fn import_excel_rejects_invalid_base64() {
+        let (_directory, database) = test_database();
+        assert_error(
+            database.import_excel("!!!not base64!!!", None),
+            "无法解析 Excel 文件",
+        );
     }
 
     #[test]
     fn settings_default_to_empty_values_when_not_configured() {
         let (_directory, database) = test_database();
-
         let settings = database.get_settings().unwrap();
 
         assert_eq!(settings.tmdb_api_key, "");

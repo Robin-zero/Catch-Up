@@ -1,8 +1,10 @@
 pub mod database;
+pub mod excel;
 pub mod settings;
 pub mod tmdb;
 pub mod webdav;
 
+use base64::Engine as _;
 use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
 use settings::AppSettings;
 use tauri::{Manager, State};
@@ -20,12 +22,18 @@ fn create_entry(database: State<'_, Database>, input: EntryInput) -> Result<Medi
 }
 
 #[tauri::command]
-fn import_markdown(
+fn import_excel(
     database: State<'_, Database>,
-    markdown: String,
+    data: String,
     default_media_type: Option<MediaType>,
 ) -> Result<ImportReport, String> {
-    database.import_markdown(&markdown, default_media_type)
+    database.import_excel(&data, default_media_type)
+}
+
+#[tauri::command]
+fn download_excel_template() -> Result<String, String> {
+    let bytes = excel::generate_template_bytes()?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 #[tauri::command]
@@ -176,7 +184,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_entries,
             create_entry,
-            import_markdown,
+            import_excel,
+            download_excel_template,
             update_entry,
             delete_entry,
             adjust_progress,

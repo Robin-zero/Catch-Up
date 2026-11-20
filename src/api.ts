@@ -22,14 +22,18 @@ export function updateEntry(id: string, input: EntryInput): Promise<MediaEntry> 
   return invoke<MediaEntry>("update_entry", { id, input });
 }
 
-export function importMarkdown(
-  markdown: string,
-  defaultMediaType: MediaType,
+export function importExcel(
+  dataBase64: string,
+  defaultMediaType?: MediaType,
 ): Promise<ImportReport> {
-  return invoke<ImportReport>("import_markdown", {
-    markdown,
-    defaultMediaType,
+  return invoke<ImportReport>("import_excel", {
+    data: dataBase64,
+    defaultMediaType: defaultMediaType ?? null,
   });
+}
+
+export function downloadExcelTemplate(): Promise<string> {
+  return invoke<string>("download_excel_template");
 }
 
 export function deleteEntry(id: string): Promise<void> {

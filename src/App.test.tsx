@@ -12,9 +12,10 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  downloadExcelTemplate,
   emptyTrash,
   getSettings,
-  importMarkdown,
+  importExcel,
   listEntries,
   listTrash,
   purgeEntry,
@@ -45,7 +46,8 @@ vi.mock("./api", () => ({
   restoreEntry: vi.fn(),
   purgeEntry: vi.fn(),
   emptyTrash: vi.fn(),
-  importMarkdown: vi.fn(),
+  importExcel: vi.fn(),
+  downloadExcelTemplate: vi.fn(),
   adjustProgress: vi.fn(),
   setEntryStatus: vi.fn(),
   getSettings: vi.fn(),
@@ -65,7 +67,8 @@ const mockedDeleteEntry = vi.mocked(deleteEntry);
 const mockedRestoreEntry = vi.mocked(restoreEntry);
 const mockedPurgeEntry = vi.mocked(purgeEntry);
 const mockedEmptyTrash = vi.mocked(emptyTrash);
-const mockedImportMarkdown = vi.mocked(importMarkdown);
+const mockedImportExcel = vi.mocked(importExcel);
+const mockedDownloadExcelTemplate = vi.mocked(downloadExcelTemplate);
 const mockedAdjustProgress = vi.mocked(adjustProgress);
 const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 const mockedGetSettings = vi.mocked(getSettings);
@@ -115,7 +118,9 @@ beforeEach(() => {
   mockedRestoreEntry.mockReset();
   mockedPurgeEntry.mockReset();
   mockedEmptyTrash.mockReset();
-  mockedImportMarkdown.mockReset();
+  mockedImportExcel.mockReset();
+  mockedDownloadExcelTemplate.mockReset();
+  mockedDownloadExcelTemplate.mockResolvedValue("UEsDBA==");
   mockedAdjustProgress.mockReset();
   mockedSetEntryStatus.mockReset();
   mockedGetSettings.mockReset();
@@ -1811,7 +1816,26 @@ describe("短剧与条目元数据", () => {
   });
 });
 
-describe("Markdown 清单导入", () => {
+describe("Excel 清单导入", () => {
+  function xlsxFile(name = "import.xlsx", content = "test") {
+    return new File([content], name, {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+  }
+
+  function selectFile(dialog: HTMLElement, file: File) {
+    const input = within(dialog).getByLabelText("选择文件");
+    fireEvent.change(input, { target: { files: [file] } });
+  }
+
+  async function submitEnabled(dialog: HTMLElement) {
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "开始导入" }),
+      ).toBeEnabled(),
+    );
+  }
+
   async function openImportDialog() {
     const user = userEvent.setup();
     mockedListEntries.mockResolvedValue([]);
@@ -1819,64 +1843,82 @@ describe("Markdown 清单导入", () => {
     await screen.findByRole("heading", { name: "内容库还是空的" });
     const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
     await user.click(
-      within(sidebar).getByRole("button", { name: "导入 Markdown" }),
+      within(sidebar).getByRole("button", { name: "导入 Excel" }),
     );
     return {
       user,
-      dialog: screen.getByRole("dialog", { name: "导入 Markdown" }),
+      dialog: screen.getByRole("dialog", { name: "导入 Excel" }),
     };
   }
 
-  it("从侧边栏打开导入对话框，展示两种格式示例与默认剧集", async () => {
+  it("从侧边栏打开导入对话框，展示文件选择、默认类型与下载模板", async () => {
     const { dialog } = await openImportDialog();
 
-    const textarea = within(dialog).getByLabelText("Markdown 内容");
-    expect(textarea).toHaveFocus();
-    expect(within(dialog).getByLabelText("默认类型")).toHaveValue("drama");
-    expect(within(dialog).getByLabelText("从本地文件读取")).toHaveAttribute(
+    expect(within(dialog).getByLabelText("选择文件")).toHaveFocus();
+    expect(within(dialog).getByLabelText("选择文件")).toHaveAttribute(
       "accept",
-      ".md,.markdown,text/markdown,text/plain",
+      ".xlsx,.xls,.csv",
     );
-    expect(within(dialog).getByText(/标题 \| 类型 \| 第N季/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("默认类型")).toHaveValue("drama");
     expect(
-      within(dialog).getByText(/自动识别季、进度、平台和评分/),
-    ).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("button", { name: "开始导入" }),
+      within(dialog).getByRole("button", { name: "下载模板" }),
     ).toBeVisible();
+    const submit = within(dialog).getByRole("button", { name: "开始导入" });
+    expect(submit).toBeDisabled();
 
     const mobileButton = screen
-      .getAllByRole("button", { name: "导入 Markdown" })
+      .getAllByRole("button", { name: "导入 Excel" })
       .find((button) => button.classList.contains("topbar__import-button"));
     expect(mobileButton).toBeDefined();
   });
 
-  it("提交时调用 import_markdown 并传递 Markdown 与默认类型", async () => {
+  it("下载模板按钮调用 download_excel_template", async () => {
     const { user, dialog } = await openImportDialog();
-    const markdown =
-      "庆余年 | 剧集 | 第2季 | 3/36 | 腾讯视频 | 8.6";
-    mockedImportMarkdown.mockResolvedValue({
+
+    await user.click(within(dialog).getByRole("button", { name: "下载模板" }));
+
+    await waitFor(() =>
+      expect(mockedDownloadExcelTemplate).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("下载模板失败时显示错误提示", async () => {
+    const { user, dialog } = await openImportDialog();
+    mockedDownloadExcelTemplate.mockRejectedValue(new Error("template error"));
+
+    await user.click(within(dialog).getByRole("button", { name: "下载模板" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "下载模板失败，请重试。",
+    );
+  });
+
+  it("选择文件后启用提交，并传递 base64 与默认类型", async () => {
+    const { user, dialog } = await openImportDialog();
+    mockedImportExcel.mockResolvedValue({
       imported: 1,
       skipped: 0,
       errors: [],
       entries: [makeEntry({ id: "imported", title: "庆余年" })],
     });
 
-    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
-      target: { value: markdown },
-    });
+    selectFile(dialog, xlsxFile("庆余年.xlsx"));
+    expect(
+      await within(dialog).findByText("已选择：庆余年.xlsx"),
+    ).toBeInTheDocument();
+    await submitEnabled(dialog);
     await user.selectOptions(within(dialog).getByLabelText("默认类型"), "anime");
     await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
 
     expect(
       await within(dialog).findByText(/成功导入 1 条，跳过 0 条/),
     ).toBeInTheDocument();
-    expect(mockedImportMarkdown).toHaveBeenCalledWith(markdown, "anime");
+    expect(mockedImportExcel).toHaveBeenCalledWith(btoa("test"), "anime");
   });
 
   it("展示成功、跳过数量与逐条错误信息", async () => {
     const { user, dialog } = await openImportDialog();
-    mockedImportMarkdown.mockResolvedValue({
+    mockedImportExcel.mockResolvedValue({
       imported: 2,
       skipped: 1,
       errors: ["第 3 行：评分必须在 0 到 10 之间。"],
@@ -1886,9 +1928,8 @@ describe("Markdown 清单导入", () => {
       ],
     });
 
-    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
-      target: { value: "- 第一条\n- 第二条\n- 第三条 11分" },
-    });
+    selectFile(dialog, xlsxFile());
+    await submitEnabled(dialog);
     await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
 
     const status = await within(dialog).findByRole("status");
@@ -1915,19 +1956,18 @@ describe("Markdown 清单导入", () => {
     await user.selectOptions(screen.getByLabelText("类型筛选"), "anime");
     const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
     await user.click(
-      within(sidebar).getByRole("button", { name: "导入 Markdown" }),
+      within(sidebar).getByRole("button", { name: "导入 Excel" }),
     );
-    const dialog = screen.getByRole("dialog", { name: "导入 Markdown" });
-    mockedImportMarkdown.mockResolvedValue({
+    const dialog = screen.getByRole("dialog", { name: "导入 Excel" });
+    mockedImportExcel.mockResolvedValue({
       imported: 1,
       skipped: 0,
       errors: [],
       entries: [importedEntry],
     });
 
-    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
-      target: { value: "- 刚导入的剧 番剧" },
-    });
+    selectFile(dialog, xlsxFile());
+    await submitEnabled(dialog);
     await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
 
     expect(
@@ -1937,30 +1977,25 @@ describe("Markdown 清单导入", () => {
     expect(screen.getByLabelText("类型筛选")).toHaveValue("anime");
 
     await user.click(within(dialog).getByRole("button", { name: "关闭" }));
-    expect(screen.queryByRole("dialog", { name: "导入 Markdown" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "导入 Excel" })).toBeNull();
     expect(
       screen.getByRole("article", { name: "刚导入的剧" }),
     ).toBeInTheDocument();
   });
 
-  it("导入失败时显示提示、保留输入且不关闭对话框", async () => {
+  it("导入失败时显示提示且不关闭对话框", async () => {
     const { user, dialog } = await openImportDialog();
-    const markdown = "- 保留这一行";
-    mockedImportMarkdown.mockRejectedValue(new Error("backend unavailable"));
+    mockedImportExcel.mockRejectedValue(new Error("backend unavailable"));
 
-    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
-      target: { value: markdown },
-    });
+    selectFile(dialog, xlsxFile());
+    await submitEnabled(dialog);
     await user.click(within(dialog).getByRole("button", { name: "开始导入" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "backend unavailable",
     );
-    expect(within(dialog).getByLabelText("Markdown 内容")).toHaveValue(
-      markdown,
-    );
     expect(
-      screen.getByRole("dialog", { name: "导入 Markdown" }),
+      screen.getByRole("dialog", { name: "导入 Excel" }),
     ).toBeInTheDocument();
     expect(
       within(dialog).getByRole("button", { name: "开始导入" }),
@@ -1970,23 +2005,22 @@ describe("Markdown 清单导入", () => {
   it("导入中禁用重复提交，完成后恢复操作", async () => {
     const { user, dialog } = await openImportDialog();
     const deferred = createDeferred<ImportReport>();
-    mockedImportMarkdown.mockReturnValue(deferred.promise);
+    mockedImportExcel.mockReturnValue(deferred.promise);
 
-    fireEvent.change(within(dialog).getByLabelText("Markdown 内容"), {
-      target: { value: "- 慢速导入" },
-    });
+    selectFile(dialog, xlsxFile());
+    await submitEnabled(dialog);
     const submit = within(dialog).getByRole("button", { name: "开始导入" });
     await user.click(submit);
 
     expect(submit).toBeDisabled();
-    expect(within(dialog).getByLabelText("Markdown 内容")).toBeDisabled();
+    expect(within(dialog).getByLabelText("选择文件")).toBeDisabled();
     expect(
       within(dialog).getByRole("button", { name: "导入中…" }),
     ).toBeDisabled();
     await user.click(
       within(dialog).getByRole("button", { name: "导入中…" }),
     );
-    expect(mockedImportMarkdown).toHaveBeenCalledTimes(1);
+    expect(mockedImportExcel).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       deferred.resolve({

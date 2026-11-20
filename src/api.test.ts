@@ -4,10 +4,11 @@ import {
   adjustProgress,
   createEntry,
   deleteEntry,
+  downloadExcelTemplate,
   emptyTrash,
   getLibraryErrorMessage,
   getSettings,
-  importMarkdown,
+  importExcel,
   listEntries,
   listTrash,
   purgeEntry,
@@ -68,7 +69,7 @@ describe("Tauri 数据访问", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("create_entry", { input });
   });
 
-  it("通过 import_markdown 传递 Markdown 与默认类型", async () => {
+  it("通过 import_excel 传递 base64 数据与可选默认类型", async () => {
     const report = {
       imported: 1,
       skipped: 0,
@@ -77,13 +78,25 @@ describe("Tauri 数据访问", () => {
     };
     mockedInvoke.mockResolvedValue(report);
 
-    await expect(importMarkdown("- 测试条目", "anime")).resolves.toEqual(
-      report,
-    );
-    expect(mockedInvoke).toHaveBeenCalledWith("import_markdown", {
-      markdown: "- 测试条目",
+    await expect(importExcel("UEsDBA==", "anime")).resolves.toEqual(report);
+    expect(mockedInvoke).toHaveBeenCalledWith("import_excel", {
+      data: "UEsDBA==",
       defaultMediaType: "anime",
     });
+
+    mockedInvoke.mockClear();
+    await importExcel("UEsDBA==");
+    expect(mockedInvoke).toHaveBeenCalledWith("import_excel", {
+      data: "UEsDBA==",
+      defaultMediaType: null,
+    });
+  });
+
+  it("通过 download_excel_template 返回 base64 模板", async () => {
+    mockedInvoke.mockResolvedValue("UEsDBA==");
+
+    await expect(downloadExcelTemplate()).resolves.toBe("UEsDBA==");
+    expect(mockedInvoke).toHaveBeenCalledWith("download_excel_template");
   });
 
   it("通过 update_entry 传递条目 id 和完整输入", async () => {

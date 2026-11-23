@@ -138,6 +138,16 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
     // 类型、状态下拉选项，覆盖前 1000 行数据区。
     let media_types = ["剧集", "番剧", "综艺", "小说", "电影", "短剧"];
     let statuses = ["在追", "待看", "已完成", "已弃剧"];
+    let platforms = [
+        "腾讯视频",
+        "爱奇艺",
+        "优酷",
+        "芒果TV",
+        "哔哩哔哩",
+        "红果短剧",
+        "Netflix",
+        "其他",
+    ];
     let last_row = 1000;
 
     let media_validation = DataValidation::new()
@@ -168,6 +178,21 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
         .map_err(template_error)?;
     worksheet
         .add_data_validation(1, 5, last_row, 5, &status_validation)
+        .map_err(template_error)?;
+
+    let platform_validation = DataValidation::new()
+        .allow_list_strings(&platforms)
+        .map_err(template_error)?
+        .set_input_title("选择平台")
+        .map_err(template_error)?
+        .set_input_message("请从下拉列表中选择平台，选填")
+        .map_err(template_error)?
+        .set_error_title("平台无效")
+        .map_err(template_error)?
+        .set_error_message("请从下拉列表中选择有效的平台")
+        .map_err(template_error)?;
+    worksheet
+        .add_data_validation(1, 6, last_row, 6, &platform_validation)
         .map_err(template_error)?;
 
     // 冻结首行与首列（标题列），并给表头加筛选。

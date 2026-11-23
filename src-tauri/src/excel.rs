@@ -1,6 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
 use calamine::{open_workbook_auto_from_rs, Data, Reader};
-use rust_xlsxwriter::Workbook;
+use rust_xlsxwriter::{
+    Color, DataValidation, Format, FormatAlign, FormatBorder, Workbook, XlsxError,
+};
 
 use crate::database::{
     parse_media_type_field, parse_optional_count, parse_optional_rating, parse_optional_season,
@@ -17,13 +19,15 @@ pub(crate) fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("无法解析 Excel 文件：{error}"))
 }
 
+fn template_error(error: XlsxError) -> String {
+    format!("生成模板失败：{error}")
+}
+
 /// 生成一份导入模板工作簿（xlsx 二进制）。
 pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
-    worksheet
-        .set_name("追更导入模板")
-        .map_err(|error| format!("生成模板失败：{error}"))?;
+    worksheet.set_name("追更导入模板").map_err(template_error)?;
 
     let headers = [
         "标题",
@@ -37,40 +41,142 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
         "封面",
         "简介",
     ];
+
+    let header_format = Format::new()
+        .set_bold()
+        .set_font_color(Color::White)
+        .set_background_color(Color::RGB(0x1F4E79))
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter)
+        .set_border(FormatBorder::Thin)
+        .set_border_color(Color::RGB(0x1F4E79));
+
+    let text_format = Format::new()
+        .set_align(FormatAlign::VerticalCenter)
+        .set_border(FormatBorder::Thin)
+        .set_border_color(Color::RGB(0xD9D9D9));
+
+    let integer_format = Format::new()
+        .set_num_format("0")
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter)
+        .set_border(FormatBorder::Thin)
+        .set_border_color(Color::RGB(0xD9D9D9));
+
+    let rating_format = Format::new()
+        .set_num_format("0.0")
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter)
+        .set_border(FormatBorder::Thin)
+        .set_border_color(Color::RGB(0xD9D9D9));
+
+    // 封面列按文本处理，避免链接被自动转换或过长数字变成科学计数法。
+    let link_format = text_format.clone().set_num_format("@");
+    let overview_format = text_format.clone().set_text_wrap();
+
     for (column, header) in headers.iter().enumerate() {
         worksheet
-            .write_string(0, column as u16, *header)
-            .map_err(|error| format!("生成模板失败：{error}"))?;
+            .write_string_with_format(0, column as u16, *header, &header_format)
+            .map_err(template_error)?;
     }
+    worksheet.set_row_height(0, 24).map_err(template_error)?;
 
-    let sample = [
-        "庆余年",
-        "剧集",
-        "2",
-        "3",
-        "36",
-        "在追",
-        "腾讯视频",
-        "8.6",
-        "https://example.com/cover.jpg",
-        "一段示例简介",
-    ];
-    for (column, value) in sample.iter().enumerate() {
-        worksheet
-            .write_string(1, column as u16, *value)
-            .map_err(|error| format!("生成模板失败：{error}"))?;
-    }
+    // 示例行：数字列写入真正的数值，便于直观看到数字格式。
+    worksheet
+        .write_string_with_format(1, 0, "庆余年", &text_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_string_with_format(1, 1, "剧集", &text_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_number_with_format(1, 2, 2, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_number_with_format(1, 3, 3, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_number_with_format(1, 4, 36, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_string_with_format(1, 5, "在追", &text_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_string_with_format(1, 6, "腾讯视频", &text_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_number_with_format(1, 7, 8.6, &rating_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_string_with_format(1, 8, "https://example.com/cover.jpg", &link_format)
+        .map_err(template_error)?;
+    worksheet
+        .write_string_with_format(1, 9, "一段示例简介", &overview_format)
+        .map_err(template_error)?;
 
     let widths = [22.0, 10.0, 6.0, 10.0, 9.0, 8.0, 12.0, 7.0, 32.0, 32.0];
     for (column, width) in widths.iter().enumerate() {
         worksheet
             .set_column_width(column as u16, *width)
-            .map_err(|error| format!("生成模板失败：{error}"))?;
+            .map_err(template_error)?;
     }
 
-    workbook
-        .save_to_buffer()
-        .map_err(|error| format!("生成模板失败：{error}"))
+    // 数字列整列套用格式，用户新增行也能得到一致的数字显示。
+    worksheet
+        .set_column_format(2, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .set_column_format(3, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .set_column_format(4, &integer_format)
+        .map_err(template_error)?;
+    worksheet
+        .set_column_format(7, &rating_format)
+        .map_err(template_error)?;
+    worksheet
+        .set_column_format(8, &link_format)
+        .map_err(template_error)?;
+
+    // 类型、状态下拉选项，覆盖前 1000 行数据区。
+    let media_types = ["剧集", "番剧", "综艺", "小说", "电影", "短剧"];
+    let statuses = ["在追", "待看", "已完成", "已弃剧"];
+    let last_row = 1000;
+
+    let media_validation = DataValidation::new()
+        .allow_list_strings(&media_types)
+        .map_err(template_error)?
+        .set_input_title("选择类型")
+        .map_err(template_error)?
+        .set_input_message("请从下拉列表中选择内容类型")
+        .map_err(template_error)?
+        .set_error_title("类型无效")
+        .map_err(template_error)?
+        .set_error_message("请从下拉列表中选择有效的类型")
+        .map_err(template_error)?;
+    worksheet
+        .add_data_validation(1, 1, last_row, 1, &media_validation)
+        .map_err(template_error)?;
+
+    let status_validation = DataValidation::new()
+        .allow_list_strings(&statuses)
+        .map_err(template_error)?
+        .set_input_title("选择状态")
+        .map_err(template_error)?
+        .set_input_message("请从下拉列表中选择追更状态")
+        .map_err(template_error)?
+        .set_error_title("状态无效")
+        .map_err(template_error)?
+        .set_error_message("请从下拉列表中选择有效的状态")
+        .map_err(template_error)?;
+    worksheet
+        .add_data_validation(1, 5, last_row, 5, &status_validation)
+        .map_err(template_error)?;
+
+    // 冻结首行与首列（标题列），并给表头加筛选。
+    worksheet.set_freeze_panes(1, 1).map_err(template_error)?;
+    worksheet.autofilter(0, 0, 1, 9).map_err(template_error)?;
+
+    workbook.save_to_buffer().map_err(template_error)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

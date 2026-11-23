@@ -1554,7 +1554,7 @@ describe("短剧与条目元数据", () => {
     mockedListEntries.mockResolvedValue([
       makeEntry({
         title: "漫长的季节",
-        season: 2,
+        season: "2",
         rating: 8.6,
         platform: "腾讯视频",
       }),
@@ -1684,7 +1684,7 @@ describe("短剧与条目元数据", () => {
       mediaType: "short_drama",
       currentProgress: 0,
       totalProgress: null,
-      season: 2,
+      season: "2",
       rating: 8.6,
       platform: "腾讯视频",
       coverUrl,
@@ -1716,7 +1716,7 @@ describe("短剧与条目元数据", () => {
       currentProgress: 0,
       totalProgress: null,
       status: "tracking",
-      season: 2,
+      season: "2",
       rating: 8.6,
       platform: "腾讯视频",
       coverUrl,
@@ -1734,9 +1734,12 @@ describe("短剧与条目元数据", () => {
     );
   });
 
-  it("季和评分的非法值在字段旁提示并阻止提交", async () => {
+  it("季支持自定义文本，评分非法值时在字段旁提示并阻止提交", async () => {
     const user = userEvent.setup();
     mockedListEntries.mockResolvedValue([]);
+    mockedCreateEntry.mockResolvedValue(
+      makeEntry({ id: "created-text-season", title: "校验条目", season: "年番" }),
+    );
 
     render(<App />);
 
@@ -1746,31 +1749,25 @@ describe("短剧与条目元数据", () => {
     await user.type(within(dialog).getByLabelText("标题"), "校验条目");
     const season = within(dialog).getByLabelText("季");
     const rating = within(dialog).getByLabelText("评分");
-    await user.type(season, "0");
+    await user.type(season, "年番");
     await user.type(rating, "10.5");
     await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
 
-    expect(season).toHaveAttribute("aria-invalid", "true");
-    expect(season).toHaveAccessibleDescription("季数必须是 1 到 999 的整数。");
-    expect(season).toHaveFocus();
-    expect(rating).toHaveAttribute("aria-invalid", "true");
-    expect(rating).toHaveAccessibleDescription(
-      "评分必须是 0 到 10 之间的数字，且最多 1 位小数。",
-    );
-    expect(mockedCreateEntry).not.toHaveBeenCalled();
-
-    await user.clear(season);
-    await user.type(season, "2");
-    await user.clear(rating);
-    await user.type(rating, "8.25");
-    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
-
     expect(season).not.toHaveAttribute("aria-invalid");
+    expect(rating).toHaveAttribute("aria-invalid", "true");
     expect(rating).toHaveAccessibleDescription(
       "评分必须是 0 到 10 之间的数字，且最多 1 位小数。",
     );
     expect(rating).toHaveFocus();
     expect(mockedCreateEntry).not.toHaveBeenCalled();
+
+    await user.clear(rating);
+    await user.type(rating, "8.6");
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(mockedCreateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ season: "年番" }),
+    );
   });
 
   it("封面只接受 http/https 链接，留空的可选字段提交为 null", async () => {

@@ -653,16 +653,8 @@ function EntryFormDialog({
     ) {
       nextErrors.currentProgress = "当前进度不能大于总进度。";
     }
-    if (seasonText) {
-      const season = Number(seasonText);
-      if (
-        !/^\d+$/.test(seasonText) ||
-        !Number.isSafeInteger(season) ||
-        season < 1 ||
-        season > 999
-      ) {
-        nextErrors.season = "季数必须是 1 到 999 的整数。";
-      }
+    if (seasonText.length > 20) {
+      nextErrors.season = "季不能超过 20 个字符。";
     }
     if (
       ratingText &&
@@ -707,7 +699,7 @@ function EntryFormDialog({
       currentProgress,
       totalProgress,
       status: values.status,
-      season: seasonText ? Number(seasonText) : null,
+      season: seasonText || null,
       rating: ratingText ? Number(ratingText) : null,
       platform: platform || null,
       coverUrl: coverUrl || null,
@@ -903,12 +895,9 @@ function EntryFormDialog({
                 <input
                   id="entry-season"
                   name="season"
-                  type="number"
-                  inputMode="numeric"
-                  min="1"
-                  max="999"
-                  step="1"
-                  placeholder="如 1"
+                  type="text"
+                  maxLength={20}
+                  placeholder="如 1、年番"
                   value={values.season}
                   aria-invalid={errors.season ? true : undefined}
                   aria-describedby={
@@ -924,7 +913,7 @@ function EntryFormDialog({
                     {errors.season}
                   </p>
                 ) : (
-                  <p className="field-hint">选填，1–999</p>
+                  <p className="field-hint">选填，可填数字或自定义文本</p>
                 )}
               </div>
 
@@ -2309,7 +2298,11 @@ function EntryRow({
             {entry.season !== null && entry.season !== undefined ? (
               <>
                 <span className="entry__dot" aria-hidden="true">·</span>
-                <span className="entry__season">第 {entry.season} 季</span>
+                <span className="entry__season">
+                  {/^\d+$/.test(entry.season)
+                    ? `第 ${entry.season} 季`
+                    : entry.season}
+                </span>
               </>
             ) : null}
             {entry.rating !== null && entry.rating !== undefined ? (

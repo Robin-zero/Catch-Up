@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::settings::{normalize_library_view, normalize_theme, AppSettings};
 
-const DATABASE_VERSION: u32 = 5;
+const DATABASE_VERSION: u32 = 6;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -35,9 +35,9 @@ const ENTRIES_V2_DEFINITION: &str = "
     status TEXT NOT NULL CHECK (
         status IN ('tracking', 'completed', 'dropped', 'to_watch')
     ),
-    season INTEGER CHECK (
+    season TEXT CHECK (
         season IS NULL
-        OR (typeof(season) = 'integer' AND season BETWEEN 1 AND 999)
+        OR (typeof(season) = 'text' AND length(trim(season)) BETWEEN 1 AND 20)
     ),
     rating REAL CHECK (
         rating IS NULL
@@ -155,7 +155,7 @@ pub struct MediaEntry {
     pub current_progress: i64,
     pub total_progress: Option<i64>,
     pub status: EntryStatus,
-    pub season: Option<u32>,
+    pub season: Option<String>,
     pub rating: Option<f64>,
     pub platform: Option<String>,
     pub cover_url: Option<String>,
@@ -172,7 +172,7 @@ pub struct EntryInput {
     pub current_progress: i64,
     pub total_progress: Option<i64>,
     pub status: EntryStatus,
-    pub season: Option<u32>,
+    pub season: Option<String>,
     pub rating: Option<f64>,
     pub platform: Option<String>,
     pub cover_url: Option<String>,
@@ -198,7 +198,7 @@ pub struct SyncEntry {
     pub current_progress: i64,
     pub total_progress: Option<i64>,
     pub status: EntryStatus,
-    pub season: Option<u32>,
+    pub season: Option<String>,
     pub rating: Option<f64>,
     pub platform: Option<String>,
     pub cover_url: Option<String>,
@@ -223,7 +223,7 @@ struct ValidatedInput {
     current_progress: i64,
     total_progress: Option<i64>,
     status: EntryStatus,
-    season: Option<u32>,
+    season: Option<String>,
     rating: Option<f64>,
     platform: Option<String>,
     cover_url: Option<String>,
@@ -263,19 +263,12 @@ impl EntryInput {
             current_progress: self.current_progress,
             total_progress: self.total_progress,
             status,
-            season: validate_season(self.season)?,
+            season: optional_trimmed(self.season, "季", 20)?,
             rating: validate_rating(self.rating)?,
             platform: optional_trimmed(self.platform, "平台", 60)?,
             cover_url: validate_cover_url(self.cover_url)?,
             overview: optional_trimmed(self.overview, "简介", 2000)?,
         })
-    }
-}
-
-fn validate_season(season: Option<u32>) -> Result<Option<u32>, String> {
-    match season {
-        Some(value) if !(1..=999).contains(&value) => Err("季数必须在 1 到 999 之间".to_owned()),
-        other => Ok(other),
     }
 }
 
@@ -349,17 +342,15 @@ pub(crate) fn parse_optional_count(raw: &str, field: &str) -> Result<Option<i64>
         .map_err(|_| format!("{field}格式不正确"))
 }
 
-pub(crate) fn parse_optional_season(raw: &str) -> Result<Option<u32>, String> {
-    let cleaned = raw.trim();
-    let cleaned = cleaned.strip_prefix('第').unwrap_or(cleaned).trim();
-    let cleaned = cleaned.strip_suffix('季').unwrap_or(cleaned).trim();
-    if cleaned.is_empty() {
+pub(crate) fn parse_optional_season(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         return Ok(None);
     }
-    cleaned
-        .parse::<u32>()
-        .map(Some)
-        .map_err(|_| "季数格式不正确".to_owned())
+    if trimmed.chars().count() > 20 {
+        return Err("季不能超过 20 个字符".to_owned());
+    }
+    Ok(Some(trimmed.to_owned()))
 }
 
 pub(crate) fn parse_optional_rating(raw: &str) -> Result<Option<f64>, String> {
@@ -503,12 +494,43 @@ impl Database {
                     )
                     SELECT
                         id, title, media_type, current_progress, total_progress, status,
-                        season, rating, platform, cover_url, overview, created_at, updated_at,
-                        deleted_at
+                        CAST(season AS TEXT), rating, platform, cover_url, overview,
+                        created_at, updated_at, deleted_at
                     FROM entries;
 
                     DROP TABLE entries;
                     ALTER TABLE entries_v5 RENAME TO entries;
+                    ",
+                )
+                .map_err(|error| format!("无法升级数据库表：{error}"))?;
+        } else if !entries_season_allows_text(&transaction)
+            .map_err(|error| format!("无法检查数据库表结构：{error}"))?
+        {
+            // v5 → v6：季由整数改为自由文本，支持“年番”等自定义内容。
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS entries_v6;")
+                .map_err(|error| format!("无法清理旧迁移表：{error}"))?;
+            transaction
+                .execute_batch(&format!(
+                    "CREATE TABLE entries_v6 ({ENTRIES_V2_DEFINITION});"
+                ))
+                .map_err(|error| format!("无法创建新版数据库表：{error}"))?;
+            transaction
+                .execute_batch(
+                    "
+                    INSERT INTO entries_v6 (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    )
+                    SELECT
+                        id, title, media_type, current_progress, total_progress, status,
+                        CAST(season AS TEXT), rating, platform, cover_url, overview,
+                        created_at, updated_at, deleted_at
+                    FROM entries;
+
+                    DROP TABLE entries;
+                    ALTER TABLE entries_v6 RENAME TO entries;
                     ",
                 )
                 .map_err(|error| format!("无法升级数据库表：{error}"))?;
@@ -666,7 +688,7 @@ impl Database {
             let key = (
                 input.title.clone(),
                 input.media_type.as_str().to_owned(),
-                input.season,
+                input.season.clone(),
             );
             if !seen.insert(key) {
                 skipped += 1;
@@ -675,8 +697,13 @@ impl Database {
                 ));
                 continue;
             }
-            if entry_exists(&transaction, &input.title, input.media_type, input.season)
-                .map_err(|error| format!("检查重复条目失败：{error}"))?
+            if entry_exists(
+                &transaction,
+                &input.title,
+                input.media_type,
+                input.season.as_deref(),
+            )
+            .map_err(|error| format!("检查重复条目失败：{error}"))?
             {
                 skipped += 1;
                 errors.push(format!(
@@ -1159,7 +1186,7 @@ fn insert_entry(connection: &Connection, entry: &MediaEntry) -> rusqlite::Result
             entry.current_progress,
             entry.total_progress,
             entry.status.as_str(),
-            entry.season,
+            &entry.season,
             entry.rating,
             &entry.platform,
             &entry.cover_url,
@@ -1175,7 +1202,7 @@ fn entry_exists(
     connection: &Connection,
     title: &str,
     media_type: MediaType,
-    season: Option<u32>,
+    season: Option<&str>,
 ) -> rusqlite::Result<bool> {
     connection.query_row(
         "
@@ -1212,6 +1239,17 @@ fn entries_status_allows_to_watch(connection: &Connection) -> rusqlite::Result<b
         )
         .optional()?;
     Ok(definition.is_some_and(|text| text.contains("'to_watch'")))
+}
+
+fn entries_season_allows_text(connection: &Connection) -> rusqlite::Result<bool> {
+    let definition: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(definition.is_some_and(|text| text.contains("season TEXT")))
 }
 
 fn query_entries(
@@ -1307,7 +1345,7 @@ fn upsert_sync_entry(connection: &Connection, entry: &SyncEntry) -> rusqlite::Re
             entry.current_progress,
             entry.total_progress,
             entry.status.as_str(),
-            entry.season,
+            &entry.season,
             entry.rating,
             &entry.platform,
             &entry.cover_url,
@@ -1980,8 +2018,11 @@ mod tests {
             "UPDATE entries SET total_progress = 2.5 WHERE id = ?1".to_owned(),
             "UPDATE entries SET current_progress = 11 WHERE id = ?1".to_owned(),
             "UPDATE entries SET status = 'paused' WHERE id = ?1".to_owned(),
-            "UPDATE entries SET season = 0 WHERE id = ?1".to_owned(),
-            "UPDATE entries SET season = 1000 WHERE id = ?1".to_owned(),
+            "UPDATE entries SET season = '   ' WHERE id = ?1".to_owned(),
+            format!(
+                "UPDATE entries SET season = '{}' WHERE id = ?1",
+                "a".repeat(21)
+            ),
             "UPDATE entries SET rating = 10.5 WHERE id = ?1".to_owned(),
             "UPDATE entries SET rating = 8.25 WHERE id = ?1".to_owned(),
             "UPDATE entries SET cover_url = 'ftp://example.com/a.png' WHERE id = ?1".to_owned(),
@@ -2140,43 +2181,44 @@ mod tests {
     }
 
     #[test]
-    fn season_boundaries_are_enforced() {
+    fn season_accepts_custom_text() {
         let (_directory, database) = test_database();
-        for season in [1, 999] {
-            let entry = database
-                .create_entry(EntryInput {
-                    season: Some(season),
-                    total_progress: None,
-                    ..input("分季")
-                })
-                .unwrap();
-            assert_eq!(entry.season, Some(season));
-        }
+
+        let custom = database
+            .create_entry(EntryInput {
+                season: Some("年番".to_owned()),
+                total_progress: None,
+                ..input("自定义季")
+            })
+            .unwrap();
+        assert_eq!(custom.season.as_deref(), Some("年番"));
+
+        let trimmed = database
+            .create_entry(EntryInput {
+                season: Some("  第二季  ".to_owned()),
+                total_progress: None,
+                ..input("含空格季")
+            })
+            .unwrap();
+        assert_eq!(trimmed.season.as_deref(), Some("第二季"));
 
         assert_error(
             database.create_entry(EntryInput {
-                season: Some(0),
-                ..input("零季")
+                season: Some("a".repeat(21)),
+                ..input("超长季")
             }),
-            "季数必须在 1 到 999 之间",
-        );
-        assert_error(
-            database.create_entry(EntryInput {
-                season: Some(1000),
-                ..input("超季")
-            }),
-            "季数必须在 1 到 999 之间",
+            "季不能超过 20 个字符",
         );
 
-        let negative_season = json!({
-            "title": "负季",
+        let numeric_season = json!({
+            "title": "数字季",
             "mediaType": "drama",
             "currentProgress": 0,
             "totalProgress": null,
             "status": "tracking",
-            "season": -1
+            "season": 2
         });
-        assert!(serde_json::from_value::<EntryInput>(negative_season).is_err());
+        assert!(serde_json::from_value::<EntryInput>(numeric_season).is_err());
     }
 
     #[test]
@@ -2612,7 +2654,7 @@ mod tests {
         let first = &report.entries[0];
         assert_eq!(first.title, "庆余年");
         assert_eq!(first.media_type, MediaType::Drama);
-        assert_eq!(first.season, Some(2));
+        assert_eq!(first.season.as_deref(), Some("2"));
         assert_eq!(first.current_progress, 3);
         assert_eq!(first.total_progress, Some(36));
         assert_eq!(first.status, EntryStatus::Tracking);
@@ -2683,7 +2725,7 @@ mod tests {
         let (_directory, database) = test_database();
         database
             .create_entry(EntryInput {
-                season: Some(2),
+                season: Some("2".to_owned()),
                 ..input("庆余年")
             })
             .unwrap();
@@ -2923,7 +2965,7 @@ mod tests {
                         id, title, media_type, current_progress, total_progress, status,
                         season, rating, platform, cover_url, overview, created_at, updated_at,
                         deleted_at
-                    ) VALUES (?1, ?2, 'drama', 4, 12, 'tracking', 2, 8.6, '腾讯视频',
+                    ) VALUES (?1, ?2, 'drama', 4, 12, 'tracking', '2', 8.6, '腾讯视频',
                         'https://example.com/cover.jpg', '简介', ?3, ?3, NULL)
                     ",
                     params!["v2-entry", "旧版 v2 条目", "2024-01-01T00:00:00.000000000Z"],
@@ -2941,7 +2983,7 @@ mod tests {
         let entries = database.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "v2-entry");
-        assert_eq!(entries[0].season, Some(2));
+        assert_eq!(entries[0].season.as_deref(), Some("2"));
         assert_eq!(entries[0].rating, Some(8.6));
 
         {
@@ -3071,6 +3113,74 @@ mod tests {
             })
             .unwrap();
         assert_eq!(planned.status, EntryStatus::ToWatch);
+
+        let version: u32 = database
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+    }
+
+    #[test]
+    fn v5_database_upgrades_season_to_text() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE entries (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        title TEXT NOT NULL,
+                        media_type TEXT NOT NULL,
+                        current_progress INTEGER NOT NULL,
+                        total_progress INTEGER,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('tracking','completed','dropped','to_watch')
+                        ),
+                        season INTEGER CHECK (season IS NULL OR season BETWEEN 1 AND 999),
+                        rating REAL,
+                        platform TEXT,
+                        cover_url TEXT,
+                        overview TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        deleted_at TEXT
+                    );
+                    PRAGMA user_version = 5;
+                    ",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    ) VALUES (?1, ?2, 'anime', 4, 12, 'tracking', 2, NULL, NULL,
+                        NULL, NULL, ?3, ?3, NULL)
+                    ",
+                    params!["v5-entry", "旧版 v5 条目", "2024-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let entries = database.list_entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].season.as_deref(), Some("2"));
+
+        let custom = database
+            .create_entry(EntryInput {
+                season: Some("年番".to_owned()),
+                total_progress: None,
+                ..input("升级后自定义季")
+            })
+            .unwrap();
+        assert_eq!(custom.season.as_deref(), Some("年番"));
 
         let version: u32 = database
             .lock()

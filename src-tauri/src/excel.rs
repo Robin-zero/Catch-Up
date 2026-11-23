@@ -89,7 +89,7 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
         .write_string_with_format(1, 1, "剧集", &text_format)
         .map_err(template_error)?;
     worksheet
-        .write_number_with_format(1, 2, 2, &integer_format)
+        .write_string_with_format(1, 2, "2", &text_format)
         .map_err(template_error)?;
     worksheet
         .write_number_with_format(1, 3, 3, &integer_format)
@@ -113,7 +113,7 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
         .write_string_with_format(1, 9, "一段示例简介", &overview_format)
         .map_err(template_error)?;
 
-    let widths = [22.0, 10.0, 6.0, 10.0, 9.0, 8.0, 12.0, 7.0, 32.0, 32.0];
+    let widths = [22.0, 10.0, 8.0, 10.0, 9.0, 8.0, 12.0, 7.0, 32.0, 32.0];
     for (column, width) in widths.iter().enumerate() {
         worksheet
             .set_column_width(column as u16, *width)
@@ -121,9 +121,6 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
     }
 
     // 数字列整列套用格式，用户新增行也能得到一致的数字显示。
-    worksheet
-        .set_column_format(2, &integer_format)
-        .map_err(template_error)?;
     worksheet
         .set_column_format(3, &integer_format)
         .map_err(template_error)?;
@@ -133,6 +130,7 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
     worksheet
         .set_column_format(7, &rating_format)
         .map_err(template_error)?;
+    // 封面列按文本处理，避免链接被自动转换或过长数字变成科学计数法。
     worksheet
         .set_column_format(8, &link_format)
         .map_err(template_error)?;
@@ -466,14 +464,14 @@ mod tests {
                 "https://example.com/a.jpg",
                 "简介",
             ],
-            &["无名之剧", "", "", "", "", "待看", "", "", "", ""],
+            &["无名之剧", "", "年番", "", "", "待看", "", "", "", ""],
         ]);
         let parsed = parse_workbook(&bytes, MediaType::Drama).unwrap();
         assert_eq!(parsed.len(), 2);
         let first = parsed[0].1.as_ref().unwrap();
         assert_eq!(first.title, "庆余年");
         assert_eq!(first.media_type, MediaType::Drama);
-        assert_eq!(first.season, Some(2));
+        assert_eq!(first.season.as_deref(), Some("2"));
         assert_eq!(first.current_progress, 3);
         assert_eq!(first.total_progress, Some(36));
         assert_eq!(first.status, EntryStatus::Tracking);
@@ -487,6 +485,7 @@ mod tests {
 
         let second = parsed[1].1.as_ref().unwrap();
         assert_eq!(second.title, "无名之剧");
+        assert_eq!(second.season.as_deref(), Some("年番"));
         assert_eq!(second.status, EntryStatus::ToWatch);
         assert_eq!(second.current_progress, 0);
         assert_eq!(second.total_progress, None);

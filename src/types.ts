@@ -19,7 +19,7 @@ export interface MediaEntry {
   currentProgress: number;
   totalProgress: number | null;
   status: EntryStatus;
-  season?: number | null;
+  season?: string | null;
   rating?: number | null;
   platform?: string | null;
   coverUrl?: string | null;
@@ -81,7 +81,7 @@ export interface EntryInput {
   currentProgress: number;
   totalProgress: number | null;
   status: EntryStatus;
-  season?: number | null;
+  season?: string | null;
   rating?: number | null;
   platform?: string | null;
   coverUrl?: string | null;

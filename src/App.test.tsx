@@ -61,6 +61,7 @@ vi.mock("./api", () => ({
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
   ),
+  isTauri: () => true,
 }));
 
 const mockedListEntries = vi.mocked(listEntries);

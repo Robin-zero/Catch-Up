@@ -27,6 +27,10 @@ import {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+// api.ts 会在浏览器中检测 window.__TAURI__ 来决定是否走 Tauri 后端。
+// 这里给它一个空对象，让所有调用都走被 mock 的 invoke 路径。
+(window as unknown as { __TAURI__: unknown }).__TAURI__ = {};
+
 const mockedInvoke = vi.mocked(invoke);
 
 const input: EntryInput = {

@@ -20,6 +20,7 @@ import {
   getLibraryErrorMessage,
   getSettings,
   importExcel,
+  isTauri,
   listEntries,
   listTrash,
   purgeEntry,
@@ -515,8 +516,12 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-function triggerBase64Download(base64: string, filename: string): void {
-  const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`;
+function triggerBase64Download(
+  base64: string,
+  filename: string,
+  mime: string,
+): void {
+  const dataUrl = `data:${mime};base64,${base64}`;
   const anchor = document.createElement("a");
   anchor.href = dataUrl;
   anchor.download = filename;
@@ -1422,7 +1427,15 @@ function ImportExcelDialog({
     setTemplateNotice(null);
     try {
       const base64 = await downloadExcelTemplate();
-      triggerBase64Download(base64, "追更导入模板.xlsx");
+      if (isTauri()) {
+        triggerBase64Download(
+          base64,
+          "追更导入模板.xlsx",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+      } else {
+        triggerBase64Download(base64, "追更导入模板.csv", "text/csv;charset=utf-8");
+      }
       setTemplateNotice("模板已下载，请到下载目录查看。");
     } catch {
       setError("下载模板失败，请重试。");

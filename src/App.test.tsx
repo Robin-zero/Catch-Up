@@ -21,6 +21,7 @@ import {
   listTrash,
   purgeEntry,
   restoreEntry,
+  saveCoverImage,
   saveSettings,
   searchTmdb,
   setEntryStatus,
@@ -53,6 +54,8 @@ vi.mock("./api", () => ({
   setEntryStatus: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
+  saveCoverImage: vi.fn(),
+  cacheCoverFromUrl: vi.fn((url: string) => Promise.resolve(url)),
   searchTmdb: vi.fn(),
   syncNow: vi.fn(),
   getLibraryErrorMessage: vi.fn(
@@ -74,6 +77,7 @@ const mockedAdjustProgress = vi.mocked(adjustProgress);
 const mockedSetEntryStatus = vi.mocked(setEntryStatus);
 const mockedGetSettings = vi.mocked(getSettings);
 const mockedSaveSettings = vi.mocked(saveSettings);
+const mockedSaveCoverImage = vi.mocked(saveCoverImage);
 const mockedSearchTmdb = vi.mocked(searchTmdb);
 const mockedSyncNow = vi.mocked(syncNow);
 
@@ -1703,7 +1707,7 @@ describe("短剧与条目元数据", () => {
     await user.type(within(dialog).getByLabelText("季"), "2");
     await user.type(within(dialog).getByLabelText("评分"), "8.6");
     await user.type(within(dialog).getByLabelText("平台"), "腾讯视频");
-    await user.type(within(dialog).getByLabelText("封面 URL"), coverUrl);
+    await user.type(within(dialog).getByLabelText("封面"), coverUrl);
     await user.type(within(dialog).getByLabelText("简介"), "一句话简介");
     await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
 
@@ -1782,13 +1786,13 @@ describe("短剧与条目元数据", () => {
     await user.click(screen.getByRole("button", { name: "添加条目" }));
     const dialog = screen.getByRole("dialog", { name: "添加条目" });
     await user.type(within(dialog).getByLabelText("标题"), "合法条目");
-    const cover = within(dialog).getByLabelText("封面 URL");
+    const cover = within(dialog).getByLabelText("封面");
     await user.type(cover, "ftp://example.com/a.jpg");
     await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
 
     expect(cover).toHaveAttribute("aria-invalid", "true");
     expect(cover).toHaveAccessibleDescription(
-      "封面必须是以 http:// 或 https:// 开头的链接。",
+      "封面需为 http(s) 链接或本地图片。",
     );
     expect(cover).toHaveFocus();
     expect(mockedCreateEntry).not.toHaveBeenCalled();
@@ -1811,6 +1815,41 @@ describe("短剧与条目元数据", () => {
       coverUrl: null,
       overview: null,
     });
+  });
+
+  it("可以从本地选择封面图片并保存为本地路径", async () => {
+    const user = userEvent.setup();
+    const created = makeEntry({ id: "created-local-cover", title: "本地封面" });
+    mockedListEntries.mockResolvedValue([]);
+    mockedCreateEntry.mockResolvedValue(created);
+    mockedSaveCoverImage.mockResolvedValue("/data/covers/cover-1.jpg");
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    await user.type(within(dialog).getByLabelText("标题"), "本地封面");
+
+    const file = new File(["fake-image"], "poster.jpg", {
+      type: "image/jpeg",
+    });
+    fireEvent.change(within(dialog).getByLabelText("选择本地封面图片"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("封面")).toHaveValue(
+        "/data/covers/cover-1.jpg",
+      ),
+    );
+    expect(mockedSaveCoverImage).toHaveBeenCalledWith(expect.any(String), "jpg");
+
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    expect(mockedCreateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ coverUrl: "/data/covers/cover-1.jpg" }),
+    );
   });
 });
 
@@ -1870,13 +1909,16 @@ describe("Excel 清单导入", () => {
     expect(mobileButton).toBeDefined();
   });
 
-  it("下载模板按钮调用 download_excel_template", async () => {
+  it("下载模板按钮调用 download_excel_template 并提示成功", async () => {
     const { user, dialog } = await openImportDialog();
 
     await user.click(within(dialog).getByRole("button", { name: "下载模板" }));
 
     await waitFor(() =>
       expect(mockedDownloadExcelTemplate).toHaveBeenCalledTimes(1),
+    );
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(
+      "模板已下载，请到下载目录查看。",
     );
   });
 
@@ -2466,7 +2508,7 @@ describe("TMDB 元数据刮削", () => {
       ).toBeNull(),
     );
     expect(within(form).getByLabelText("标题")).toHaveValue("我的沙丘");
-    expect(within(form).getByLabelText("封面 URL")).toHaveValue(
+    expect(within(form).getByLabelText("封面")).toHaveValue(
       "https://image.tmdb.org/t/p/w500/poster.jpg",
     );
     expect(within(form).getByLabelText("评分")).toHaveValue(8.2);

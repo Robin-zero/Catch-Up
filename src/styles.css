@@ -1825,6 +1825,41 @@ kbd {
   color: var(--danger);
 }
 
+.form-success {
+  margin-bottom: 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--accent);
+}
+
+.cover-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cover-picker input[type="text"] {
+  flex: 1;
+}
+
+.cover-picker__file {
+  display: none;
+}
+
+.cover-picker__preview {
+  display: block;
+  width: 72px;
+  height: 96px;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 /* ---------- Settings ---------- */
 
 .entry-form__title-row {

@@ -1,3 +1,4 @@
+pub mod cover;
 pub mod database;
 pub mod excel;
 pub mod settings;
@@ -136,6 +137,8 @@ pub fn run() {
             create_entry,
             import_excel,
             download_excel_template,
+            cover::save_cover_image,
+            cover::cache_cover_from_url,
             update_entry,
             delete_entry,
             adjust_progress,

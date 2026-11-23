@@ -9,8 +9,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   adjustProgress,
+  cacheCoverFromUrl,
   createEntry,
   deleteEntry,
   downloadExcelTemplate,
@@ -22,6 +24,7 @@ import {
   listTrash,
   purgeEntry,
   restoreEntry,
+  saveCoverImage,
   saveSettings,
   searchTmdb,
   setEntryStatus,
@@ -207,7 +210,7 @@ function EntryTile({
       {showCover && coverUrl ? (
         <img
           className="entry__cover"
-          src={coverUrl}
+          src={resolveCoverSrc(coverUrl)}
           alt=""
           loading="lazy"
           onError={() => {
@@ -522,6 +525,18 @@ function triggerBase64Download(base64: string, filename: string): void {
   anchor.remove();
 }
 
+/** 远程链接直接使用，本地封面路径转换为 asset 协议地址。 */
+function resolveCoverSrc(source: string): string {
+  if (/^(https?:|data:|blob:)/i.test(source)) {
+    return source;
+  }
+  try {
+    return convertFileSrc(source);
+  } catch {
+    return source;
+  }
+}
+
 function EntryFormDialog({
   editor,
   settings,
@@ -563,7 +578,9 @@ function EntryFormDialog({
   const [errors, setErrors] = useState<EntryFormErrors>({});
   const [saving, setSaving] = useState(false);
   const [scrapeOpen, setScrapeOpen] = useState(false);
+  const [importingCover, setImportingCover] = useState(false);
   const savingRef = useRef(false);
+  const coverFileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const currentProgressRef = useRef<HTMLInputElement>(null);
   const totalProgressRef = useRef<HTMLInputElement>(null);
@@ -591,10 +608,11 @@ function EntryFormDialog({
   }
 
   function applyScrapeCandidate(candidate: ScrapeCandidate) {
+    const posterUrl = candidate.posterUrl ?? null;
     setValues((current) => ({
       ...current,
       title: current.title.trim() ? current.title : candidate.title,
-      coverUrl: candidate.posterUrl ?? current.coverUrl,
+      coverUrl: posterUrl ?? current.coverUrl,
       rating:
         candidate.rating !== null ? String(candidate.rating) : current.rating,
       overview: candidate.overview ?? current.overview,
@@ -608,6 +626,65 @@ function EntryFormDialog({
       form: undefined,
     }));
     setScrapeOpen(false);
+
+    // 刮削封面下载到本地缓存，后续直接从本地读取。
+    if (posterUrl) {
+      void cacheCoverFromUrl(posterUrl)
+        .then((localPath) => {
+          if (typeof localPath !== "string" || !localPath) {
+            return;
+          }
+          setValues((current) =>
+            current.coverUrl === posterUrl
+              ? { ...current, coverUrl: localPath }
+              : current,
+          );
+        })
+        .catch(() => {
+          // 缓存失败时保留远程链接，不阻断用户操作。
+        });
+    }
+  }
+
+  async function handleCoverFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setErrors((current) => ({ ...current, coverUrl: "请选择图片文件。" }));
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setErrors((current) => ({
+        ...current,
+        coverUrl: "封面图片不能超过 10MB。",
+      }));
+      return;
+    }
+
+    setImportingCover(true);
+    try {
+      const data = await readFileAsBase64(file);
+      const extension = file.name.includes(".")
+        ? file.name.split(".").pop()?.toLowerCase() ?? ""
+        : "";
+      const localPath = await saveCoverImage(data, extension);
+      setValues((current) => ({ ...current, coverUrl: localPath }));
+      setErrors((current) => ({
+        ...current,
+        coverUrl: undefined,
+        form: undefined,
+      }));
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        coverUrl: getWriteErrorMessage(error, "导入本地图片失败，请重试。"),
+      }));
+    } finally {
+      setImportingCover(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -662,8 +739,13 @@ function EntryFormDialog({
     ) {
       nextErrors.rating = "评分必须是 0 到 10 之间的数字，且最多 1 位小数。";
     }
-    if (coverUrl && !/^https?:\/\//i.test(coverUrl)) {
-      nextErrors.coverUrl = "封面必须是以 http:// 或 https:// 开头的链接。";
+    if (
+      coverUrl &&
+      !/^https?:\/\//i.test(coverUrl) &&
+      !/^[a-zA-Z]:[\\/]/.test(coverUrl) &&
+      !coverUrl.startsWith("/")
+    ) {
+      nextErrors.coverUrl = "封面需为 http(s) 链接或本地图片。";
     }
     if (platform.length > 60) {
       nextErrors.platform = "平台名称不能超过 60 个字符。";
@@ -981,30 +1063,56 @@ function EntryFormDialog({
               </div>
 
               <div className="form-field">
-                <label htmlFor="entry-cover-url">封面 URL</label>
-                <input
-                  id="entry-cover-url"
-                  name="coverUrl"
-                  type="url"
-                  inputMode="url"
-                  placeholder="https://…"
-                  value={values.coverUrl}
-                  aria-invalid={errors.coverUrl ? true : undefined}
-                  aria-describedby={
-                    errors.coverUrl ? "entry-cover-url-error" : undefined
-                  }
-                  ref={coverUrlRef}
-                  onChange={(event) =>
-                    changeField("coverUrl", event.target.value)
-                  }
-                />
+                <label htmlFor="entry-cover-url">封面</label>
+                <div className="cover-picker">
+                  <input
+                    id="entry-cover-url"
+                    name="coverUrl"
+                    type="text"
+                    placeholder="https://… 或选择本地图片"
+                    value={values.coverUrl}
+                    aria-invalid={errors.coverUrl ? true : undefined}
+                    aria-describedby={
+                      errors.coverUrl ? "entry-cover-url-error" : undefined
+                    }
+                    ref={coverUrlRef}
+                    onChange={(event) =>
+                      changeField("coverUrl", event.target.value)
+                    }
+                  />
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={saving || importingCover}
+                    onClick={() => coverFileRef.current?.click()}
+                  >
+                    {importingCover ? "导入中…" : "本地图片"}
+                  </button>
+                  <input
+                    ref={coverFileRef}
+                    className="cover-picker__file"
+                    type="file"
+                    accept="image/*"
+                    aria-label="选择本地封面图片"
+                    onChange={(event) => {
+                      void handleCoverFile(event);
+                    }}
+                  />
+                </div>
                 {errors.coverUrl ? (
                   <p className="field-error" id="entry-cover-url-error">
                     {errors.coverUrl}
                   </p>
                 ) : (
-                  <p className="field-hint">选填，需以 http 或 https 开头</p>
+                  <p className="field-hint">选填，支持链接或本地图片</p>
                 )}
+                {values.coverUrl ? (
+                  <img
+                    className="cover-picker__preview"
+                    src={resolveCoverSrc(values.coverUrl)}
+                    alt="封面预览"
+                  />
+                ) : null}
               </div>
             </div>
 
@@ -1254,6 +1362,7 @@ function ImportExcelDialog({
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [templateNotice, setTemplateNotice] = useState<string | null>(null);
   const importingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleId = "import-excel-title";
@@ -1310,9 +1419,11 @@ function ImportExcelDialog({
     }
     setDownloadingTemplate(true);
     setError(null);
+    setTemplateNotice(null);
     try {
       const base64 = await downloadExcelTemplate();
       triggerBase64Download(base64, "追更导入模板.xlsx");
+      setTemplateNotice("模板已下载，请到下载目录查看。");
     } catch {
       setError("下载模板失败，请重试。");
     } finally {
@@ -1343,6 +1454,12 @@ function ImportExcelDialog({
           {error ? (
             <p className="form-error" role="alert">
               {error}
+            </p>
+          ) : null}
+
+          {templateNotice ? (
+            <p className="form-success" role="status">
+              {templateNotice}
             </p>
           ) : null}
 

@@ -36,6 +36,20 @@ export function downloadExcelTemplate(): Promise<string> {
   return invoke<string>("download_excel_template");
 }
 
+export function saveCoverImage(
+  dataBase64: string,
+  extension: string,
+): Promise<string> {
+  return invoke<string>("save_cover_image", {
+    data: dataBase64,
+    extension,
+  });
+}
+
+export function cacheCoverFromUrl(url: string): Promise<string> {
+  return invoke<string>("cache_cover_from_url", { url });
+}
+
 export function deleteEntry(id: string): Promise<void> {
   return invoke<void>("delete_entry", { id });
 }

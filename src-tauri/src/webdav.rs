@@ -1,4 +1,9 @@
-use std::{cmp::Ordering, collections::HashMap, time::Duration};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -13,6 +18,11 @@ use crate::{
 const SYNC_FILE_NAME: &str = "catchup-sync.json";
 const SNAPSHOT_VERSION: u32 = 1;
 const SYNC_TIMEOUT_SECONDS: u64 = 20;
+const COVER_DIRECTORY_NAME: &str = "covers";
+const COVER_REMOTE_DIRECTORY: &str = "catchup-covers";
+const COVER_MARKER_PREFIX: &str = "catchup-cover:";
+const COVER_MANIFEST_FILE: &str = "webdav-covers.json";
+const MAX_COVER_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,7 +268,267 @@ async fn put_snapshot(
     Ok(())
 }
 
-pub async fn sync_now(database: &Database) -> Result<SyncReport, String> {
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoverManifest {
+    /// 按封面目录地址记录已上传的文件，文件名由 UUID 生成且不会复用。
+    #[serde(default)]
+    uploaded: BTreeMap<String, BTreeSet<String>>,
+}
+
+fn covers_base_url(sync_url: &str) -> Option<String> {
+    let (base, _) = sync_url.rsplit_once('/')?;
+    (!base.is_empty()).then(|| format!("{base}/{COVER_REMOTE_DIRECTORY}"))
+}
+
+fn is_safe_cover_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':'])
+}
+
+fn cover_marker(name: &str) -> String {
+    format!("{COVER_MARKER_PREFIX}{name}")
+}
+
+fn marked_cover_name(value: &str) -> Option<&str> {
+    value
+        .strip_prefix(COVER_MARKER_PREFIX)
+        .filter(|name| is_safe_cover_name(name))
+}
+
+fn cover_content_type(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    }
+}
+
+fn load_cover_manifest(path: &Path) -> CoverManifest {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_cover_manifest(path: &Path, manifest: &CoverManifest) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建封面缓存目录：{error}"))?;
+    }
+    let body = serde_json::to_string(manifest)
+        .map_err(|error| format!("生成封面同步记录失败：{error}"))?;
+    std::fs::write(path, body).map_err(|error| format!("写入封面同步记录失败：{error}"))
+}
+
+async fn download_cover(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    covers_directory: &Path,
+    name: &str,
+) -> Result<PathBuf, String> {
+    let path = covers_directory.join(name);
+    if path.is_file() {
+        return Ok(path);
+    }
+
+    let url = format!("{covers_url}/{name}");
+    let mut request = client.get(url);
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("下载封面失败（HTTP {}）", status.as_u16()));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    if bytes.len() > MAX_COVER_BYTES {
+        return Err("封面图片不能超过 10MB".to_owned());
+    }
+    std::fs::create_dir_all(covers_directory)
+        .map_err(|error| format!("无法创建封面缓存目录：{error}"))?;
+    std::fs::write(&path, &bytes).map_err(|error| format!("写入封面缓存失败：{error}"))?;
+    Ok(path)
+}
+
+async fn ensure_cover_collection(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+) -> Result<(), String> {
+    let method = reqwest::Method::from_bytes(b"MKCOL").expect("MKCOL 是合法方法");
+    let mut request = client.request(method, covers_url);
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    let status = response.status();
+    // 405 表示目录已存在，部分服务端也用它代替 201。
+    if status.is_success() || status.as_u16() == 405 {
+        Ok(())
+    } else {
+        Err(format!(
+            "创建 WebDAV 封面目录失败（HTTP {}）",
+            status.as_u16()
+        ))
+    }
+}
+
+async fn upload_cover(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    name: &str,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let url = format!("{covers_url}/{name}");
+    let mut request = client
+        .put(url)
+        .header(CONTENT_TYPE, cover_content_type(name))
+        .body(bytes);
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("上传封面失败（HTTP {}）", status.as_u16()));
+    }
+    Ok(())
+}
+
+/// 把远端条目里的封面标记下载到本地，并替换成可用的本地路径。
+async fn hydrate_cover_markers(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    covers_directory: &Path,
+    manifest: &mut CoverManifest,
+    entries: &mut [SyncEntry],
+) {
+    for entry in entries {
+        let Some(name) = entry
+            .cover_url
+            .as_deref()
+            .and_then(marked_cover_name)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        if let Ok(path) = download_cover(client, covers_url, settings, covers_directory, &name).await
+        {
+            entry.cover_url = Some(path.to_string_lossy().into_owned());
+            manifest
+                .uploaded
+                .entry(covers_url.to_owned())
+                .or_default()
+                .insert(name);
+        }
+        // 下载失败时保留标记，下次同步继续重试。
+    }
+}
+
+/// 把本地封面文件上传到 WebDAV，并把条目中的封面替换成可跨设备识别的标记。
+async fn publish_local_covers(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    covers_directory: &Path,
+    manifest: &mut CoverManifest,
+    entries: &mut [SyncEntry],
+) {
+    let mut collection_ready = false;
+
+    for entry in entries {
+        let Some(value) = entry.cover_url.clone() else {
+            continue;
+        };
+        if marked_cover_name(&value).is_some()
+            || value.starts_with("http://")
+            || value.starts_with("https://")
+        {
+            continue;
+        }
+
+        let path = PathBuf::from(&value);
+        let Ok(relative) = path.strip_prefix(covers_directory) else {
+            continue;
+        };
+        if relative.components().count() != 1 {
+            continue;
+        }
+        let Some(name) = relative.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !is_safe_cover_name(name) || !path.is_file() {
+            continue;
+        }
+
+        let uploaded = manifest
+            .uploaded
+            .get(covers_url)
+            .is_some_and(|names| names.contains(name));
+        if !uploaded {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if bytes.len() > MAX_COVER_BYTES {
+                continue;
+            }
+            if !collection_ready {
+                if ensure_cover_collection(client, covers_url, settings)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                collection_ready = true;
+            }
+            if upload_cover(client, covers_url, settings, name, bytes)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            manifest
+                .uploaded
+                .entry(covers_url.to_owned())
+                .or_default()
+                .insert(name.to_owned());
+        }
+
+        entry.cover_url = Some(cover_marker(name));
+    }
+}
+
+pub async fn sync_now(
+    database: &Database,
+    data_directory: &Path,
+) -> Result<SyncReport, String> {
     // 同一时刻只允许一个同步过程，避免并发请求互相覆盖。
     static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = SYNC_LOCK.lock().await;
@@ -267,10 +537,39 @@ pub async fn sync_now(database: &Database) -> Result<SyncReport, String> {
     let url = prepare_sync_url(&settings)?;
 
     // 读取本地数据后立即释放数据库锁，网络请求期间不持有 MutexGuard。
-    let (local_entries, local_purged) = database.read_sync_state()?;
+    let (mut local_entries, local_purged) = database.read_sync_state()?;
 
     let client = build_client()?;
-    let remote = fetch_snapshot(&client, &url, &settings).await?;
+    let mut remote = fetch_snapshot(&client, &url, &settings).await?;
+
+    let covers_directory = data_directory.join(COVER_DIRECTORY_NAME);
+    let manifest_path = data_directory.join(COVER_MANIFEST_FILE);
+    let mut manifest = load_cover_manifest(&manifest_path);
+    let original_manifest = manifest.clone();
+    let covers_base = covers_base_url(&url);
+
+    if let Some(covers_url) = covers_base.as_deref() {
+        hydrate_cover_markers(
+            &client,
+            covers_url,
+            &settings,
+            &covers_directory,
+            &mut manifest,
+            &mut remote.entries,
+        )
+        .await;
+        // 上一轮下载失败遗留的标记也在本次同步中重试。
+        hydrate_cover_markers(
+            &client,
+            covers_url,
+            &settings,
+            &covers_directory,
+            &mut manifest,
+            &mut local_entries,
+        )
+        .await;
+    }
+
     let merge = merge_libraries(
         &local_entries,
         &local_purged,
@@ -280,11 +579,27 @@ pub async fn sync_now(database: &Database) -> Result<SyncReport, String> {
 
     database.apply_sync_merge(&merge.entries, &merge.purged)?;
 
+    let mut snapshot_entries = merge.entries;
+    if let Some(covers_url) = covers_base.as_deref() {
+        publish_local_covers(
+            &client,
+            covers_url,
+            &settings,
+            &covers_directory,
+            &mut manifest,
+            &mut snapshot_entries,
+        )
+        .await;
+    }
+    if manifest != original_manifest {
+        let _ = save_cover_manifest(&manifest_path, &manifest);
+    }
+
     let exported_at = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
     let snapshot = SyncSnapshot {
         version: SNAPSHOT_VERSION,
         exported_at: exported_at.clone(),
-        entries: merge.entries,
+        entries: snapshot_entries,
         purged: merge.purged,
     };
     put_snapshot(&client, &url, &settings, &snapshot).await?;
@@ -540,5 +855,59 @@ mod tests {
         assert_eq!(value["downloaded"], json!(2));
         DateTime::parse_from_rfc3339(value["lastSyncedAt"].as_str().unwrap()).unwrap();
         assert!(value.get("last_synced_at").is_none());
+    }
+
+    #[test]
+    fn cover_directory_lives_next_to_the_snapshot() {
+        assert_eq!(
+            covers_base_url("https://dav.example.com/catchup/catchup-sync.json").as_deref(),
+            Some("https://dav.example.com/catchup/catchup-covers")
+        );
+        assert_eq!(covers_base_url("catchup-sync.json"), None);
+    }
+
+    #[test]
+    fn cover_markers_reject_unsafe_file_names() {
+        assert_eq!(
+            marked_cover_name("catchup-cover:cover-1.jpg"),
+            Some("cover-1.jpg")
+        );
+        assert_eq!(marked_cover_name("catchup-cover:../secret.jpg"), None);
+        assert_eq!(marked_cover_name("catchup-cover:C:\\secret.jpg"), None);
+        assert_eq!(marked_cover_name("https://example.com/a.jpg"), None);
+        assert_eq!(cover_marker("a.png"), "catchup-cover:a.png");
+    }
+
+    #[test]
+    fn cover_content_types_follow_the_extension() {
+        assert_eq!(cover_content_type("cover-1.PNG"), "image/png");
+        assert_eq!(cover_content_type("cover-1.webp"), "image/webp");
+        assert_eq!(cover_content_type("cover-1"), "image/jpeg");
+    }
+
+    #[test]
+    fn cover_manifest_round_trips_on_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(COVER_MANIFEST_FILE);
+        let mut manifest = CoverManifest::default();
+        manifest
+            .uploaded
+            .entry("https://dav.example.com/covers".to_owned())
+            .or_default()
+            .insert("cover-1.jpg".to_owned());
+
+        save_cover_manifest(&path, &manifest).unwrap();
+
+        assert_eq!(load_cover_manifest(&path), manifest);
+    }
+
+    #[test]
+    fn missing_or_corrupted_manifest_falls_back_to_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(COVER_MANIFEST_FILE);
+        assert_eq!(load_cover_manifest(&path), CoverManifest::default());
+
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(load_cover_manifest(&path), CoverManifest::default());
     }
 }

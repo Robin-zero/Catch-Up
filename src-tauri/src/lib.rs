@@ -127,8 +127,15 @@ async fn smart_scrape(
 }
 
 #[tauri::command]
-async fn sync_now(database: State<'_, Database>) -> Result<SyncReport, String> {
-    webdav::sync_now(database.inner()).await
+async fn sync_now(
+    app: tauri::AppHandle,
+    database: State<'_, Database>,
+) -> Result<SyncReport, String> {
+    let data_directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    webdav::sync_now(database.inner(), &data_directory).await
 }
 
 #[cfg(desktop)]

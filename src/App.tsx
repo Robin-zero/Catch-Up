@@ -3798,162 +3798,171 @@ function App() {
             </p>
           </div>
 
-          <div className="search-field">
-            <label className="sr-only" htmlFor="library-title-query">
-              搜索标题
-            </label>
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <circle cx="8.5" cy="8.5" r="5.5" />
-              <path d="m12.5 12.5 4 4" />
-            </svg>
-            <input
-              id="library-title-query"
-              ref={searchInputRef}
-              type="search"
-              value={titleQuery}
-              placeholder="搜索标题"
-              autoComplete="off"
-              onChange={(event) => setTitleQuery(event.target.value)}
-            />
-          </div>
+          <div className="topbar__tools">
+            <div className="search-field">
+              <label className="sr-only" htmlFor="library-title-query">
+                搜索标题
+              </label>
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="8.5" cy="8.5" r="5.5" />
+                <path d="m12.5 12.5 4 4" />
+              </svg>
+              <input
+                id="library-title-query"
+                ref={searchInputRef}
+                type="search"
+                value={titleQuery}
+                placeholder="搜索标题"
+                autoComplete="off"
+                onChange={(event) => setTitleQuery(event.target.value)}
+              />
+            </div>
 
-          <div className="filter-row">
-            <label className="sr-only" htmlFor="library-media-type-filter">
-              类型筛选
-            </label>
-            <select
-              id="library-media-type-filter"
-              className="compact-select"
-              value={mediaTypeFilter}
-              onChange={(event) =>
-                setMediaTypeFilter(event.target.value as MediaType | "all")
-              }
-            >
-              <option value="all">全部类型</option>
-              {MEDIA_TYPES.map((mediaType) => (
-                <option key={mediaType} value={mediaType}>
-                  {MEDIA_TYPE_LABELS[mediaType]}
-                </option>
-              ))}
-            </select>
+            <div className="filter-row">
+              <label className="sr-only" htmlFor="library-media-type-filter">
+                类型筛选
+              </label>
+              <select
+                id="library-media-type-filter"
+                className="compact-select"
+                value={mediaTypeFilter}
+                onChange={(event) =>
+                  setMediaTypeFilter(event.target.value as MediaType | "all")
+                }
+              >
+                <option value="all">全部类型</option>
+                {MEDIA_TYPES.map((mediaType) => (
+                  <option key={mediaType} value={mediaType}>
+                    {MEDIA_TYPE_LABELS[mediaType]}
+                  </option>
+                ))}
+              </select>
 
-            {!isTrashView ? (
-              <>
-                <label className="sr-only" htmlFor="library-status-filter">
-                  状态筛选
-                </label>
-                <select
-                  id="library-status-filter"
-                  className="compact-select"
-                  value={statusFilter}
-                  onChange={(event) =>
-                    setStatusFilter(
-                      event.target.value as MediaEntry["status"] | "all",
-                    )
-                  }
+              {!isTrashView ? (
+                <>
+                  <label className="sr-only" htmlFor="library-status-filter">
+                    状态筛选
+                  </label>
+                  <select
+                    id="library-status-filter"
+                    className="compact-select"
+                    value={statusFilter}
+                    onChange={(event) =>
+                      setStatusFilter(
+                        event.target.value as MediaEntry["status"] | "all",
+                      )
+                    }
+                  >
+                    <option value="all">全部状态</option>
+                    {ENTRY_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {ENTRY_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : null}
+
+              {hasActiveFilters ? (
+                <button
+                  className="icon-button filter-reset"
+                  type="button"
+                  aria-label="重置搜索和筛选"
+                  title="重置搜索和筛选"
+                  onClick={clearFilters}
                 >
-                  <option value="all">全部状态</option>
-                  {ENTRY_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {ENTRY_STATUS_LABELS[status]}
-                    </option>
-                  ))}
-                </select>
-              </>
-            ) : null}
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path d="M4.5 6.5a6 6 0 1 1-.6 4" />
+                    <path d="M4.5 2.8v3.7H8.2" />
+                  </svg>
+                </button>
+              ) : null}
 
-            <label className="sr-only" htmlFor="library-sort">
-              排序方式
-            </label>
-            <select
-              id="library-sort"
-              className="compact-select"
-              value={sortOrder}
-              onChange={(event) =>
-                setSortOrder(event.target.value as SortOrder)
-              }
-            >
-              {(Object.keys(SORT_LABELS) as SortOrder[]).map((order) => (
-                <option key={order} value={order}>
-                  {SORT_LABELS[order]}
-                </option>
-              ))}
-            </select>
+              <span className="toolbar-divider" aria-hidden="true" />
 
-            {!isTrashView ? (
-              <div className="layout-toggle" role="group" aria-label="内容库布局">
-                {(Object.keys(LAYOUT_LABELS) as LibraryView[]).map(
-                  (viewKey) => (
-                    <button
-                      key={viewKey}
-                      className="layout-toggle__option"
-                      type="button"
-                      aria-pressed={settings.libraryView === viewKey}
-                      onClick={() => handleLibraryViewChange(viewKey)}
-                    >
-                      {LAYOUT_LABELS[viewKey]}
-                    </button>
-                  ),
-                )}
-              </div>
-            ) : null}
-
-            {hasActiveFilters ? (
-              <button
-                className="icon-button filter-reset"
-                type="button"
-                aria-label="重置搜索和筛选"
-                title="重置搜索和筛选"
-                onClick={clearFilters}
+              <label className="sr-only" htmlFor="library-sort">
+                排序方式
+              </label>
+              <select
+                id="library-sort"
+                className="compact-select"
+                value={sortOrder}
+                onChange={(event) =>
+                  setSortOrder(event.target.value as SortOrder)
+                }
               >
-                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="M4.5 6.5a6 6 0 1 1-.6 4" />
-                  <path d="M4.5 2.8v3.7H8.2" />
-                </svg>
-              </button>
-            ) : null}
-          </div>
+                {(Object.keys(SORT_LABELS) as SortOrder[]).map((order) => (
+                  <option key={order} value={order}>
+                    {SORT_LABELS[order]}
+                  </option>
+                ))}
+              </select>
 
-          <div className="topbar__actions">
-            <button
-              className={`sync-chip topbar__sync-chip sync-chip--${syncState.phase}`}
-              type="button"
-              aria-label={`WebDAV 同步状态：${syncLabel}，打开设置`}
-              title={syncLabel}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <span className="sync-chip__dot" aria-hidden="true" />
-              <span className="sync-chip__label">{syncLabel}</span>
-            </button>
-            {!isTrashView ? (
-              <button
-                className={`ghost-button batch-toggle${
-                  selecting ? " batch-toggle--active" : ""
-                }`}
-                type="button"
-                aria-pressed={selecting}
-                aria-label={selecting ? "退出批量删除" : "批量删除"}
-                onClick={toggleSelecting}
-              >
-                {selecting ? "退出批量" : "批量删除"}
-              </button>
-            ) : null}
+              {!isTrashView ? (
+                <div className="layout-toggle" role="group" aria-label="内容库布局">
+                  {(Object.keys(LAYOUT_LABELS) as LibraryView[]).map(
+                    (viewKey) => (
+                      <button
+                        key={viewKey}
+                        className="layout-toggle__option"
+                        type="button"
+                        aria-pressed={settings.libraryView === viewKey}
+                        onClick={() => handleLibraryViewChange(viewKey)}
+                      >
+                        {LAYOUT_LABELS[viewKey]}
+                      </button>
+                    ),
+                  )}
+                </div>
+              ) : null}
+            </div>
 
-            {!isTrashView ? (
+            <span
+              className="toolbar-divider toolbar-divider--section"
+              aria-hidden="true"
+            />
+
+            <div className="topbar__actions">
               <button
-                className="primary-button add-button"
+                className={`sync-chip topbar__sync-chip sync-chip--${syncState.phase}`}
                 type="button"
-                ref={addButtonRef}
-                aria-label="添加条目"
-                disabled={library.status === "loading"}
-                onClick={() => setEditor({ mode: "create" })}
+                aria-label={`WebDAV 同步状态：${syncLabel}，打开设置`}
+                title={syncLabel}
+                onClick={() => setSettingsOpen(true)}
               >
-                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="M10 4v12M4 10h12" />
-                </svg>
-                <span>添加条目</span>
+                <span className="sync-chip__dot" aria-hidden="true" />
+                <span className="sync-chip__label">{syncLabel}</span>
               </button>
-            ) : null}
+              {!isTrashView ? (
+                <button
+                  className={`ghost-button batch-toggle${
+                    selecting ? " batch-toggle--active" : ""
+                  }`}
+                  type="button"
+                  aria-pressed={selecting}
+                  aria-label={selecting ? "退出批量删除" : "批量删除"}
+                  onClick={toggleSelecting}
+                >
+                  {selecting ? "退出批量" : "批量删除"}
+                </button>
+              ) : null}
+
+              {!isTrashView ? (
+                <button
+                  className="primary-button add-button"
+                  type="button"
+                  ref={addButtonRef}
+                  aria-label="添加条目"
+                  disabled={library.status === "loading"}
+                  onClick={() => setEditor({ mode: "create" })}
+                >
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path d="M10 4v12M4 10h12" />
+                  </svg>
+                  <span>添加条目</span>
+                </button>
+              ) : null}
+            </div>
           </div>
         </header>
 

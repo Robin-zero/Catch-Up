@@ -719,6 +719,18 @@ svg {
   gap: 6px;
 }
 
+.topbar__tools {
+  display: contents;
+}
+
+.toolbar-divider {
+  display: none;
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--line-strong);
+}
+
 .sync-chip {
   display: none;
 }
@@ -2294,13 +2306,31 @@ kbd {
   }
 
   .topbar {
-    grid-template-columns: max-content minmax(140px, 230px) minmax(0, 1fr) auto;
-    grid-template-areas: "title search filters add";
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas: "title tools";
     padding: 9px 14px;
+  }
+
+  .topbar__tools {
+    grid-area: tools;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .topbar__tools .search-field {
+    flex: 0 1 230px;
+    min-width: 140px;
   }
 
   .filter-row {
     justify-content: flex-end;
+  }
+
+  .toolbar-divider {
+    display: block;
   }
 
   .add-button {

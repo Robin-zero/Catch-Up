@@ -66,9 +66,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
   libraryView: "list",
   aiEnabled: false,
-  aiBaseUrl: "https://api.openai.com/v1",
+  aiBaseUrl: "https://api.deepseek.com",
   aiApiKey: "",
-  aiModel: "gpt-4o-mini",
+  aiModel: "deepseek-flash",
 };
 
 export interface ScrapeCandidate {

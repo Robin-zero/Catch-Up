@@ -31,6 +31,8 @@ import {
   setEntryStatus,
   smartScrape,
   syncNow,
+  testAiConnection,
+  testWebdavConnection,
   updateEntry,
 } from "./api";
 import {
@@ -1794,6 +1796,18 @@ function SettingsDialog({
   const [saving, setSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [webdavTesting, setWebdavTesting] = useState(false);
+  const [webdavTestResult, setWebdavTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const aiTestingRef = useRef(false);
+  const webdavTestingRef = useRef(false);
   const savingRef = useRef(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
   const webdavUrlRef = useRef<HTMLInputElement>(null);
@@ -1820,6 +1834,78 @@ function SettingsDialog({
   ) {
     setValues((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined, form: undefined }));
+  }
+
+  async function handleTestAi() {
+    if (aiTestingRef.current) {
+      return;
+    }
+    const aiBaseUrl = values.aiBaseUrl.trim();
+    const aiModel = values.aiModel.trim();
+    if (!aiBaseUrl) {
+      setErrors({ aiBaseUrl: "请填写 AI 接口地址。" });
+      aiBaseUrlRef.current?.focus();
+      return;
+    }
+    if (!/^https?:\/\//i.test(aiBaseUrl)) {
+      setErrors({ aiBaseUrl: "接口地址必须以 http:// 或 https:// 开头。" });
+      aiBaseUrlRef.current?.focus();
+      return;
+    }
+    if (!aiModel) {
+      setErrors({ aiModel: "请填写 AI 模型名称。" });
+      aiModelRef.current?.focus();
+      return;
+    }
+
+    aiTestingRef.current = true;
+    setAiTesting(true);
+    setAiTestResult(null);
+    try {
+      const message = await testAiConnection({ ...values, aiBaseUrl, aiModel });
+      setAiTestResult({ ok: true, message });
+    } catch (error) {
+      setAiTestResult({
+        ok: false,
+        message: getWriteErrorMessage(error, "AI 连接测试失败，请检查配置。"),
+      });
+    } finally {
+      aiTestingRef.current = false;
+      setAiTesting(false);
+    }
+  }
+
+  async function handleTestWebdav() {
+    if (webdavTestingRef.current) {
+      return;
+    }
+    const webdavUrl = values.webdavUrl.trim();
+    if (!webdavUrl) {
+      setErrors({ webdavUrl: "请填写 WebDAV 服务器地址。" });
+      webdavUrlRef.current?.focus();
+      return;
+    }
+    if (!/^https?:\/\//i.test(webdavUrl)) {
+      setErrors({ webdavUrl: "服务器地址必须以 http:// 或 https:// 开头。" });
+      webdavUrlRef.current?.focus();
+      return;
+    }
+
+    webdavTestingRef.current = true;
+    setWebdavTesting(true);
+    setWebdavTestResult(null);
+    try {
+      const message = await testWebdavConnection({ ...values, webdavUrl });
+      setWebdavTestResult({ ok: true, message });
+    } catch (error) {
+      setWebdavTestResult({
+        ok: false,
+        message: getWriteErrorMessage(error, "WebDAV 连接测试失败，请检查配置。"),
+      });
+    } finally {
+      webdavTestingRef.current = false;
+      setWebdavTesting(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2023,7 +2109,7 @@ function SettingsDialog({
                   autoComplete="off"
                   spellCheck={false}
                   maxLength={500}
-                  placeholder="https://api.openai.com/v1"
+                  placeholder="https://api.deepseek.com"
                   value={values.aiBaseUrl}
                   aria-invalid={errors.aiBaseUrl ? true : undefined}
                   ref={aiBaseUrlRef}
@@ -2074,7 +2160,7 @@ function SettingsDialog({
                   autoComplete="off"
                   spellCheck={false}
                   maxLength={200}
-                  placeholder="gpt-4o-mini"
+                  placeholder="deepseek-flash"
                   value={values.aiModel}
                   aria-invalid={errors.aiModel ? true : undefined}
                   ref={aiModelRef}
@@ -2084,6 +2170,32 @@ function SettingsDialog({
                   <p className="field-error">{errors.aiModel}</p>
                 ) : null}
               </div>
+
+              <div className="settings-sync">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={aiTesting || saving}
+                  onClick={() => {
+                    void handleTestAi();
+                  }}
+                >
+                  {aiTesting ? "测试中…" : "测试连接"}
+                </button>
+                <p className="field-hint">
+                  使用当前填写的地址、Key 与模型发送一次最小请求。
+                </p>
+              </div>
+              {aiTestResult ? (
+                <p
+                  className={`settings-sync-result${
+                    aiTestResult.ok ? "" : " settings-sync-result--error"
+                  }`}
+                  role={aiTestResult.ok ? "status" : "alert"}
+                >
+                  {aiTestResult.message}
+                </p>
+              ) : null}
             </div>
           </section>
 
@@ -2186,10 +2298,30 @@ function SettingsDialog({
                 >
                   {syncing ? "同步中…" : "立即同步"}
                 </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={webdavTesting || saving}
+                  onClick={() => {
+                    void handleTestWebdav();
+                  }}
+                >
+                  {webdavTesting ? "测试中…" : "测试连接"}
+                </button>
                 <p className="field-hint">
                   修改服务器信息后请先保存设置，再立即同步。
                 </p>
               </div>
+              {webdavTestResult ? (
+                <p
+                  className={`settings-sync-result${
+                    webdavTestResult.ok ? "" : " settings-sync-result--error"
+                  }`}
+                  role={webdavTestResult.ok ? "status" : "alert"}
+                >
+                  {webdavTestResult.message}
+                </p>
+              ) : null}
               {syncState.phase === "synced" && syncState.report ? (
                 <p className="settings-sync-result" role="status">
                   同步完成：合并 {syncState.report.merged} 项，上传{" "}

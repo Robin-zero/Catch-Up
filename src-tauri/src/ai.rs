@@ -81,6 +81,47 @@ pub async fn complete(
     map_ai_content(&content, media_type)
 }
 
+/// 用最小的请求验证接口地址、API Key 与模型是否可用。
+pub async fn test_connection(settings: &AppSettings) -> Result<String, String> {
+    let base_url = settings.ai_base_url.trim();
+    let model = settings.ai_model.trim();
+    if base_url.is_empty() {
+        return Err("请填写 AI 接口地址".to_owned());
+    }
+    if model.is_empty() {
+        return Err("请填写 AI 模型名称".to_owned());
+    }
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [{ "role": "user", "content": "ping" }]
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(AI_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| format!("无法初始化 AI 请求：{error}"))?;
+    let mut request = client
+        .post(chat_completions_url(base_url))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body);
+    let api_key = settings.ai_api_key.trim();
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(describe_http_status(status));
+    }
+
+    Ok(format!("连接成功，模型 {model} 可用。"))
+}
+
 fn chat_completions_url(base_url: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
     if base.ends_with("/chat/completions") {
@@ -150,8 +191,8 @@ fn map_ai_content(
     content: &str,
     media_type: Option<MediaType>,
 ) -> Result<Option<ScrapeCandidate>, String> {
-    let json = extract_json_object(content)
-        .ok_or_else(|| "AI 返回内容中缺少 JSON 对象".to_owned())?;
+    let json =
+        extract_json_object(content).ok_or_else(|| "AI 返回内容中缺少 JSON 对象".to_owned())?;
     let payload: AiPayload =
         serde_json::from_str(json).map_err(|error| format!("解析 AI 返回内容失败：{error}"))?;
 
@@ -245,7 +286,7 @@ fn describe_request_error(error: &reqwest::Error) -> String {
 fn describe_http_status(status: reqwest::StatusCode) -> String {
     match status.as_u16() {
         401 | 403 => format!("AI 接口拒绝访问（HTTP {status}），请检查 API Key。"),
-        404 => format!("AI 接口不存在（HTTP {status}），请检查 Base URL 是否包含 /v1。"),
+        404 => format!("AI 接口不存在（HTTP {status}），请检查接口地址与模型名称。"),
         429 => format!("AI 接口请求过于频繁（HTTP {status}），请稍后再试。"),
         _ => format!("AI 请求失败（HTTP {status}），请稍后重试。"),
     }
@@ -276,7 +317,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(candidate.title, "葬送的芙莉莲");
-        assert_eq!(candidate.original_title.as_deref(), Some("Sousou no Frieren"));
+        assert_eq!(
+            candidate.original_title.as_deref(),
+            Some("Sousou no Frieren")
+        );
         assert_eq!(candidate.year, Some(2023));
         assert_eq!(candidate.rating, Some(9.1));
         assert_eq!(candidate.platform.as_deref(), Some("哔哩哔哩"));
@@ -290,7 +334,9 @@ mod tests {
 
     #[test]
     fn rejects_missing_title_and_invalid_values() {
-        assert!(map_ai_content("{\"title\":\"  \"}", None).unwrap().is_none());
+        assert!(map_ai_content("{\"title\":\"  \"}", None)
+            .unwrap()
+            .is_none());
 
         let candidate = map_ai_content(
             "{\"title\":\"某剧\",\"year\":\"3000\",\"rating\":42,\"posterUrl\":\"ftp://x/a.jpg\"}",

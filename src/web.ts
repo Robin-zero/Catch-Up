@@ -217,7 +217,14 @@ export function getWebSettings(): AppSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const merged = { ...DEFAULT_SETTINGS, ...parsed };
+    if (!merged.aiBaseUrl.trim()) {
+      merged.aiBaseUrl = DEFAULT_SETTINGS.aiBaseUrl;
+    }
+    if (!merged.aiModel.trim()) {
+      merged.aiModel = DEFAULT_SETTINGS.aiModel;
+    }
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -841,6 +848,97 @@ export function syncWebNow(): SyncReport {
   const now_ = now();
   const updated = saveWebSettings({ ...settings, lastSyncedAt: now_ });
   return { merged: 0, uploaded: 0, downloaded: 0, lastSyncedAt: updated.lastSyncedAt! };
+}
+
+/** 浏览器端只做一次只读请求，验证地址与账号是否可用。 */
+export async function testWebdavConnectionWeb(
+  settings: AppSettings,
+): Promise<string> {
+  const raw = settings.webdavUrl.trim();
+  if (!raw) {
+    throw new Error("请填写 WebDAV 服务器地址");
+  }
+  if (!/^https?:\/\//i.test(raw)) {
+    throw new Error("WebDAV 服务器地址仅支持 http 或 https 链接");
+  }
+  const normalized = raw.replace(/\/+$/, "");
+  const url = normalized.toLowerCase().endsWith(".json")
+    ? normalized
+    : `${normalized}/catchup-sync.json`;
+  const headers: Record<string, string> = {};
+  const username = settings.webdavUsername.trim();
+  if (username) {
+    const bytes = new TextEncoder().encode(
+      `${username}:${settings.webdavPassword}`,
+    );
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    headers.Authorization = `Basic ${btoa(binary)}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", headers });
+  } catch {
+    throw new Error("无法连接 WebDAV，请检查地址、网络或跨域设置。");
+  }
+  if (response.status >= 200 && response.status < 300) {
+    return "连接成功，已找到同步数据。";
+  }
+  if (response.status === 404) {
+    return "连接成功，远端暂无同步数据。";
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      `WebDAV 认证失败（HTTP ${response.status}），请检查用户名与密码。`,
+    );
+  }
+  throw new Error(
+    `连接 WebDAV 失败（HTTP ${response.status}），请检查地址与访问权限。`,
+  );
+}
+
+/** 浏览器端用最小请求验证 AI 接口、Key 与模型。 */
+export async function testAiConnectionWeb(
+  settings: AppSettings,
+): Promise<string> {
+  const base = settings.aiBaseUrl.trim().replace(/\/+$/, "");
+  const model = settings.aiModel.trim();
+  if (!base) {
+    throw new Error("请填写 AI 接口地址");
+  }
+  if (!model) {
+    throw new Error("请填写 AI 模型名称");
+  }
+  const url = base.endsWith("/chat/completions")
+    ? base
+    : `${base}/chat/completions`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const apiKey = settings.aiApiKey.trim();
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }),
+    });
+  } catch {
+    throw new Error("无法连接 AI 接口，请检查地址、网络或跨域设置。");
+  }
+  if (!response.ok) {
+    throw new Error(`AI 请求失败（HTTP ${response.status}），请检查配置。`);
+  }
+  return `连接成功，模型 ${model} 可用。`;
 }
 
 interface ZipEntry {

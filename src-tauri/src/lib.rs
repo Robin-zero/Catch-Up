@@ -140,6 +140,16 @@ async fn ai_scrape(
 }
 
 #[tauri::command]
+async fn test_ai_connection(settings: AppSettings) -> Result<String, String> {
+    ai::test_connection(&settings).await
+}
+
+#[tauri::command]
+async fn test_webdav_connection(settings: AppSettings) -> Result<String, String> {
+    webdav::test_connection(&settings).await
+}
+
+#[tauri::command]
 async fn sync_now(
     app: tauri::AppHandle,
     database: State<'_, Database>,
@@ -212,6 +222,8 @@ pub fn run() {
             search_tmdb,
             smart_scrape,
             ai_scrape,
+            test_ai_connection,
+            test_webdav_connection,
             sync_now,
         ])
         .run(tauri::generate_context!())

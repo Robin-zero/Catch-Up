@@ -8,6 +8,10 @@ const MAX_AI_BASE_URL_CHARS: usize = 500;
 const MAX_AI_API_KEY_CHARS: usize = 500;
 const MAX_AI_MODEL_CHARS: usize = 200;
 
+/// 默认使用 DeepSeek 的 OpenAI 兼容接口。
+pub(crate) const DEFAULT_AI_BASE_URL: &str = "https://api.deepseek.com";
+pub(crate) const DEFAULT_AI_MODEL: &str = "deepseek-flash";
+
 /// 应用设置。字段保持扁平，底层按 key 存储，便于后续新增设置项。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,16 +101,12 @@ impl AppSettings {
 
         let ai_api_key = self.ai_api_key.trim().to_owned();
         if ai_api_key.chars().count() > MAX_AI_API_KEY_CHARS {
-            return Err(format!(
-                "AI API Key 不能超过 {MAX_AI_API_KEY_CHARS} 个字符"
-            ));
+            return Err(format!("AI API Key 不能超过 {MAX_AI_API_KEY_CHARS} 个字符"));
         }
 
         let ai_model = self.ai_model.trim().to_owned();
         if ai_model.chars().count() > MAX_AI_MODEL_CHARS {
-            return Err(format!(
-                "AI 模型名称不能超过 {MAX_AI_MODEL_CHARS} 个字符"
-            ));
+            return Err(format!("AI 模型名称不能超过 {MAX_AI_MODEL_CHARS} 个字符"));
         }
         if self.ai_enabled {
             if ai_base_url.is_empty() {

@@ -31,6 +31,8 @@ import {
   smartScrapeWeb,
   setWebEntryStatus,
   syncWebNow,
+  testAiConnectionWeb,
+  testWebdavConnectionWeb,
   updateWebEntry,
   readWebEntries,
 } from "./web";
@@ -176,6 +178,16 @@ export function aiScrape(
 export function syncNow(): Promise<SyncReport> {
   if (!isTauri()) return Promise.resolve(syncWebNow());
   return invoke<SyncReport>("sync_now");
+}
+
+export function testAiConnection(settings: AppSettings): Promise<string> {
+  if (!isTauri()) return testAiConnectionWeb(settings);
+  return invoke<string>("test_ai_connection", { settings });
+}
+
+export function testWebdavConnection(settings: AppSettings): Promise<string> {
+  if (!isTauri()) return testWebdavConnectionWeb(settings);
+  return invoke<string>("test_webdav_connection", { settings });
 }
 
 export function getLibraryErrorMessage(error: unknown): string {

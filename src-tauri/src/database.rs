@@ -1244,14 +1244,35 @@ impl Database {
             ai_enabled: values
                 .get("ai_enabled")
                 .is_some_and(|value| value == "true"),
-            ai_base_url: text("ai_base_url"),
+            ai_base_url: {
+                let value = text("ai_base_url");
+                if value.trim().is_empty() {
+                    crate::settings::DEFAULT_AI_BASE_URL.to_owned()
+                } else {
+                    value
+                }
+            },
             ai_api_key: text("ai_api_key"),
-            ai_model: text("ai_model"),
+            ai_model: {
+                let value = text("ai_model");
+                if value.trim().is_empty() {
+                    crate::settings::DEFAULT_AI_MODEL.to_owned()
+                } else {
+                    value
+                }
+            },
         })
     }
 
     pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
-        let settings = settings.validate()?;
+        let mut settings = settings.validate()?;
+        // 未填写时落库默认的 DeepSeek 配置，保证读取结果与保存结果一致。
+        if settings.ai_base_url.trim().is_empty() {
+            settings.ai_base_url = crate::settings::DEFAULT_AI_BASE_URL.to_owned();
+        }
+        if settings.ai_model.trim().is_empty() {
+            settings.ai_model = crate::settings::DEFAULT_AI_MODEL.to_owned();
+        }
         let webdav_enabled = if settings.webdav_enabled {
             "true"
         } else {
@@ -3010,6 +3031,8 @@ mod tests {
         assert_eq!(settings.last_synced_at, None);
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.library_view, "list");
+        assert_eq!(settings.ai_base_url, crate::settings::DEFAULT_AI_BASE_URL);
+        assert_eq!(settings.ai_model, crate::settings::DEFAULT_AI_MODEL);
     }
 
     #[test]
@@ -3157,6 +3180,8 @@ mod tests {
         let expected_defaults = AppSettings {
             theme: "system".to_owned(),
             library_view: "list".to_owned(),
+            ai_base_url: crate::settings::DEFAULT_AI_BASE_URL.to_owned(),
+            ai_model: crate::settings::DEFAULT_AI_MODEL.to_owned(),
             ..AppSettings::default()
         };
         assert_eq!(database.get_settings().unwrap(), expected_defaults);

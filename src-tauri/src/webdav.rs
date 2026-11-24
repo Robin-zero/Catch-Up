@@ -152,10 +152,10 @@ fn merge_libraries(
     }
 }
 
-fn prepare_sync_url(settings: &AppSettings) -> Result<String, String> {
-    let url = settings.webdav_url.trim();
-    if !settings.webdav_enabled || url.is_empty() {
-        return Err("请先在设置中启用并填写 WebDAV 地址".to_owned());
+fn normalize_sync_url(raw_url: &str) -> Result<String, String> {
+    let url = raw_url.trim();
+    if url.is_empty() {
+        return Err("请填写 WebDAV 服务器地址".to_owned());
     }
 
     let lower = url.to_ascii_lowercase();
@@ -168,6 +168,13 @@ fn prepare_sync_url(settings: &AppSettings) -> Result<String, String> {
         return Ok(normalized.to_owned());
     }
     Ok(format!("{normalized}/{SYNC_FILE_NAME}"))
+}
+
+fn prepare_sync_url(settings: &AppSettings) -> Result<String, String> {
+    if !settings.webdav_enabled || settings.webdav_url.trim().is_empty() {
+        return Err("请先在设置中启用并填写 WebDAV 地址".to_owned());
+    }
+    normalize_sync_url(&settings.webdav_url)
 }
 
 fn authorization_header(settings: &AppSettings) -> Option<String> {
@@ -197,6 +204,31 @@ fn build_client() -> Result<reqwest::Client, String> {
         .timeout(Duration::from_secs(SYNC_TIMEOUT_SECONDS))
         .build()
         .map_err(|error| format!("无法初始化 WebDAV 网络请求：{error}"))
+}
+
+/// 用一次只读请求验证地址、账号与访问权限；不要求已启用自动同步。
+pub async fn test_connection(settings: &AppSettings) -> Result<String, String> {
+    let url = normalize_sync_url(&settings.webdav_url)?;
+    let client = build_client()?;
+    let mut request = client.get(&url);
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => Ok("连接成功，已找到同步数据。".to_owned()),
+        404 => Ok("连接成功，远端暂无同步数据。".to_owned()),
+        401 | 403 => Err(format!(
+            "WebDAV 认证失败（HTTP {status}），请检查用户名与密码。"
+        )),
+        _ => Err(format!(
+            "连接 WebDAV 失败（HTTP {status}），请检查地址与访问权限。"
+        )),
+    }
 }
 
 async fn fetch_snapshot(
@@ -282,10 +314,7 @@ fn covers_base_url(sync_url: &str) -> Option<String> {
 }
 
 fn is_safe_cover_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\', ':'])
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':'])
 }
 
 fn cover_marker(name: &str) -> String {
@@ -439,7 +468,8 @@ async fn hydrate_cover_markers(
         else {
             continue;
         };
-        if let Ok(path) = download_cover(client, covers_url, settings, covers_directory, &name).await
+        if let Ok(path) =
+            download_cover(client, covers_url, settings, covers_directory, &name).await
         {
             entry.cover_url = Some(path.to_string_lossy().into_owned());
             manifest
@@ -525,10 +555,7 @@ async fn publish_local_covers(
     }
 }
 
-pub async fn sync_now(
-    database: &Database,
-    data_directory: &Path,
-) -> Result<SyncReport, String> {
+pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<SyncReport, String> {
     // 同一时刻只允许一个同步过程，避免并发请求互相覆盖。
     static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = SYNC_LOCK.lock().await;

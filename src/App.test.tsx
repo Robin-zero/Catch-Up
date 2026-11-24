@@ -29,6 +29,8 @@ import {
   setEntryStatus,
   smartScrape,
   syncNow,
+  testAiConnection,
+  testWebdavConnection,
   updateEntry,
 } from "./api";
 import App from "./App";
@@ -63,6 +65,8 @@ vi.mock("./api", () => ({
   smartScrape: vi.fn(),
   aiScrape: vi.fn(),
   syncNow: vi.fn(),
+  testAiConnection: vi.fn(),
+  testWebdavConnection: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
   ),
@@ -89,6 +93,8 @@ const mockedCacheCoverFromUrl = vi.mocked(cacheCoverFromUrl);
 const mockedAiScrape = vi.mocked(aiScrape);
 const mockedSmartScrape = vi.mocked(smartScrape);
 const mockedSyncNow = vi.mocked(syncNow);
+const mockedTestAiConnection = vi.mocked(testAiConnection);
+const mockedTestWebdavConnection = vi.mocked(testWebdavConnection);
 
 function makeSyncReport(overrides: Partial<SyncReport> = {}): SyncReport {
   return {
@@ -147,6 +153,10 @@ beforeEach(() => {
   mockedAiScrape.mockReset();
   mockedSyncNow.mockReset();
   mockedSyncNow.mockResolvedValue(makeSyncReport());
+  mockedTestAiConnection.mockReset();
+  mockedTestAiConnection.mockResolvedValue("连接成功，模型 deepseek-flash 可用。");
+  mockedTestWebdavConnection.mockReset();
+  mockedTestWebdavConnection.mockResolvedValue("连接成功，远端暂无同步数据。");
 });
 
 describe("内容库", () => {
@@ -2285,6 +2295,69 @@ describe("设置中心", () => {
         }),
       ),
     );
+  });
+
+  it("AI 设置默认使用 DeepSeek，并可测试连接", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+    const aiSection = within(dialog).getByRole("region", { name: "AI 补全" });
+
+    expect(within(aiSection).getByLabelText("接口地址")).toHaveValue(
+      "https://api.deepseek.com",
+    );
+    expect(within(aiSection).getByLabelText("模型")).toHaveValue(
+      "deepseek-flash",
+    );
+
+    await user.click(
+      within(aiSection).getByRole("button", { name: "测试连接" }),
+    );
+
+    expect(mockedTestAiConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiBaseUrl: "https://api.deepseek.com",
+        aiModel: "deepseek-flash",
+      }),
+    );
+    expect(
+      await within(aiSection).findByText("连接成功，模型 deepseek-flash 可用。"),
+    ).toBeInTheDocument();
+  });
+
+  it("WebDAV 设置可测试连接并展示失败原因", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+    const webdavSection = within(dialog).getByRole("region", {
+      name: "WebDAV 同步",
+    });
+
+    await user.type(
+      within(webdavSection).getByLabelText("服务器地址"),
+      "https://dav.example.com/catchup",
+    );
+    await user.type(
+      within(webdavSection).getByLabelText("用户名"),
+      "alice",
+    );
+    mockedTestWebdavConnection.mockRejectedValueOnce(
+      "WebDAV 认证失败（HTTP 401），请检查用户名与密码。",
+    );
+
+    await user.click(
+      within(webdavSection).getByRole("button", { name: "测试连接" }),
+    );
+
+    expect(mockedTestWebdavConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        webdavUrl: "https://dav.example.com/catchup",
+        webdavUsername: "alice",
+      }),
+    );
+    expect(
+      await within(webdavSection).findByRole("alert"),
+    ).toHaveTextContent("WebDAV 认证失败（HTTP 401），请检查用户名与密码。");
   });
 
   it("保存失败时保留输入并显示错误", async () => {

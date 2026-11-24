@@ -218,10 +218,12 @@ export function getWebSettings(): AppSettings {
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     const merged = { ...DEFAULT_SETTINGS, ...parsed };
-    if (!merged.aiBaseUrl.trim()) {
+    const baseUrl = merged.aiBaseUrl.trim();
+    const model = merged.aiModel.trim();
+    if (!baseUrl || baseUrl === "https://api.openai.com/v1") {
       merged.aiBaseUrl = DEFAULT_SETTINGS.aiBaseUrl;
     }
-    if (!merged.aiModel.trim()) {
+    if (!model || model === "gpt-4o-mini") {
       merged.aiModel = DEFAULT_SETTINGS.aiModel;
     }
     return merged;

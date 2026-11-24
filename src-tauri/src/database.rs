@@ -1246,7 +1246,8 @@ impl Database {
                 .is_some_and(|value| value == "true"),
             ai_base_url: {
                 let value = text("ai_base_url");
-                if value.trim().is_empty() {
+                let trimmed = value.trim();
+                if trimmed.is_empty() || trimmed == crate::settings::LEGACY_AI_BASE_URL {
                     crate::settings::DEFAULT_AI_BASE_URL.to_owned()
                 } else {
                     value
@@ -1255,7 +1256,8 @@ impl Database {
             ai_api_key: text("ai_api_key"),
             ai_model: {
                 let value = text("ai_model");
-                if value.trim().is_empty() {
+                let trimmed = value.trim();
+                if trimmed.is_empty() || trimmed == crate::settings::LEGACY_AI_MODEL {
                     crate::settings::DEFAULT_AI_MODEL.to_owned()
                 } else {
                     value
@@ -1266,11 +1268,13 @@ impl Database {
 
     pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
         let mut settings = settings.validate()?;
-        // 未填写时落库默认的 DeepSeek 配置，保证读取结果与保存结果一致。
-        if settings.ai_base_url.trim().is_empty() {
+        // 未填写或仍是旧版默认值时，落库默认的 DeepSeek 配置。
+        let trimmed_base_url = settings.ai_base_url.trim();
+        if trimmed_base_url.is_empty() || trimmed_base_url == crate::settings::LEGACY_AI_BASE_URL {
             settings.ai_base_url = crate::settings::DEFAULT_AI_BASE_URL.to_owned();
         }
-        if settings.ai_model.trim().is_empty() {
+        let trimmed_model = settings.ai_model.trim();
+        if trimmed_model.is_empty() || trimmed_model == crate::settings::LEGACY_AI_MODEL {
             settings.ai_model = crate::settings::DEFAULT_AI_MODEL.to_owned();
         }
         let webdav_enabled = if settings.webdav_enabled {
@@ -3033,6 +3037,39 @@ mod tests {
         assert_eq!(settings.library_view, "list");
         assert_eq!(settings.ai_base_url, crate::settings::DEFAULT_AI_BASE_URL);
         assert_eq!(settings.ai_model, crate::settings::DEFAULT_AI_MODEL);
+    }
+
+    #[test]
+    fn legacy_openai_defaults_migrate_to_deepseek() {
+        let (_directory, database) = test_database();
+        {
+            let connection = database.lock().unwrap();
+            connection
+                .execute_batch(&format!(
+                    "
+                    INSERT OR REPLACE INTO settings (key, value) VALUES
+                        ('ai_base_url', '{}'),
+                        ('ai_model', '{}');
+                    ",
+                    crate::settings::LEGACY_AI_BASE_URL,
+                    crate::settings::LEGACY_AI_MODEL
+                ))
+                .unwrap();
+        }
+
+        let settings = database.get_settings().unwrap();
+        assert_eq!(settings.ai_base_url, crate::settings::DEFAULT_AI_BASE_URL);
+        assert_eq!(settings.ai_model, crate::settings::DEFAULT_AI_MODEL);
+
+        let saved = database
+            .save_settings(AppSettings {
+                ai_base_url: crate::settings::LEGACY_AI_BASE_URL.to_owned(),
+                ai_model: crate::settings::LEGACY_AI_MODEL.to_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert_eq!(saved.ai_base_url, crate::settings::DEFAULT_AI_BASE_URL);
+        assert_eq!(saved.ai_model, crate::settings::DEFAULT_AI_MODEL);
     }
 
     #[test]

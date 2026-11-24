@@ -614,7 +614,17 @@ svg {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.filter-row .compact-select {
+  flex: 0 1 auto;
+  min-width: 72px;
+}
+
+.filter-row .link-button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .compact-select {
@@ -2286,7 +2296,7 @@ kbd {
   }
 
   .topbar {
-    grid-template-columns: minmax(150px, 1fr) 230px auto auto;
+    grid-template-columns: minmax(120px, 1fr) minmax(140px, 230px) auto auto;
     grid-template-areas: "title search filters add";
     padding: 9px 14px;
   }
@@ -2335,6 +2345,10 @@ kbd {
     position: sticky;
     top: 0;
     z-index: 20;
+  }
+
+  .filter-row {
+    flex-wrap: wrap;
   }
 
   .mobile-brand {

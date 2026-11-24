@@ -2657,6 +2657,7 @@ function Sidebar({
     let completed = 0;
     let tracking = 0;
     let toWatch = 0;
+    let dropped = 0;
     for (const entry of entries) {
       byType[entry.mediaType] += 1;
       if (entry.status === "completed") {
@@ -2665,9 +2666,11 @@ function Sidebar({
         tracking += 1;
       } else if (entry.status === "to_watch") {
         toWatch += 1;
+      } else if (entry.status === "dropped") {
+        dropped += 1;
       }
     }
-    return { byType, completed, tracking, toWatch };
+    return { byType, completed, tracking, toWatch, dropped };
   }, [entries]);
 
   return (
@@ -2732,6 +2735,19 @@ function Sidebar({
           </svg>
           <span className="sidebar__label">已看完</span>
           <span className="sidebar__count">{counts.completed}</span>
+        </button>
+        <button
+          className="sidebar__item"
+          type="button"
+          aria-pressed={view === "library" && statusFilter === "dropped"}
+          onClick={() => onStatusFilter("dropped")}
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="7" />
+            <path d="m7.6 7.6 4.8 4.8M12.4 7.6l-4.8 4.8" />
+          </svg>
+          <span className="sidebar__label">已弃剧</span>
+          <span className="sidebar__count">{counts.dropped}</span>
         </button>
 
         <p className="sidebar__section">按类型</p>

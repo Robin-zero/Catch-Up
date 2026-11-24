@@ -12,6 +12,10 @@ const MAX_AI_MODEL_CHARS: usize = 200;
 pub(crate) const DEFAULT_AI_BASE_URL: &str = "https://api.deepseek.com";
 pub(crate) const DEFAULT_AI_MODEL: &str = "deepseek-flash";
 
+/// 旧版本的默认配置，读取时视为未配置并迁移为新的默认值。
+pub(crate) const LEGACY_AI_BASE_URL: &str = "https://api.openai.com/v1";
+pub(crate) const LEGACY_AI_MODEL: &str = "gpt-4o-mini";
+
 /// 应用设置。字段保持扁平，底层按 key 存储，便于后续新增设置项。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -729,6 +729,31 @@ describe("搜索与筛选", () => {
     expect(screen.queryByRole("article", { name: "最后生还者" })).toBeNull();
   });
 
+  it("侧边栏包含已弃剧分类并可按其筛选", async () => {
+    const user = userEvent.setup();
+    const dropped = makeEntry({
+      id: "dropped-1",
+      title: "弃掉的剧",
+      status: "dropped",
+    });
+    const tracking = makeEntry({ id: "tracking-1", title: "在追的剧" });
+    mockedListEntries.mockResolvedValue([dropped, tracking]);
+    render(<App />);
+
+    await screen.findByRole("article", { name: dropped.title });
+    const sidebar = screen.getByRole("complementary", { name: "侧边栏" });
+    const droppedButton = within(sidebar).getByRole("button", {
+      name: /已弃剧/,
+    });
+    expect(droppedButton).toHaveTextContent("1");
+
+    await user.click(droppedButton);
+    expect(screen.getByRole("article", { name: dropped.title })).toBeVisible();
+    expect(
+      screen.queryByRole("article", { name: tracking.title }),
+    ).toBeNull();
+  });
+
   it("类型和状态可分别筛选，有结果时可一键清除全部条件", async () => {
     const user = userEvent.setup();
     const entries = [

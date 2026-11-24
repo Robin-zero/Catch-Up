@@ -212,7 +212,7 @@ describe("内容库", () => {
       { mediaType: "drama", label: "剧集", unit: "集", title: "剧集条目" },
       { mediaType: "anime", label: "番剧", unit: "集", title: "番剧条目" },
       { mediaType: "variety", label: "综艺", unit: "集", title: "综艺条目" },
-      { mediaType: "novel", label: "小说", unit: "章", title: "小说条目" },
+      { mediaType: "short_drama", label: "短剧", unit: "集", title: "短剧条目" },
       { mediaType: "movie", label: "电影", unit: "部", title: "电影条目" },
     ];
     mockedListEntries.mockResolvedValue(
@@ -251,8 +251,8 @@ describe("内容库", () => {
     });
     const unknown = makeEntry({
       id: "unknown",
-      title: "仍在连载的小说",
-      mediaType: "novel",
+      title: "仍在连载的综艺",
+      mediaType: "variety",
       currentProgress: 8,
       totalProgress: null,
     });
@@ -276,7 +276,7 @@ describe("内容库", () => {
     );
 
     const unknownCard = screen.getByRole("article", { name: unknown.title });
-    expect(within(unknownCard).getByText("8 章")).toBeInTheDocument();
+    expect(within(unknownCard).getByText("8 集")).toBeInTheDocument();
     expect(within(unknownCard).getByText(/总进度未知/)).toBeInTheDocument();
     expect(within(unknownCard).queryByRole("progressbar")).toBeNull();
     expect(within(unknownCard).queryByText(/%/)).toBeNull();
@@ -444,7 +444,7 @@ describe("快捷进度操作", () => {
     const unknown = makeEntry({
       id: "unknown",
       title: "连载作品",
-      mediaType: "novel",
+      mediaType: "variety",
       currentProgress: 8,
       totalProgress: null,
     });
@@ -489,7 +489,7 @@ describe("快捷进度操作", () => {
     );
 
     expect(mockedAdjustProgress).toHaveBeenCalledWith(unknown.id, 1);
-    expect(within(unknownCard).getByText("23 章")).toBeInTheDocument();
+    expect(within(unknownCard).getByText("23 集")).toBeInTheDocument();
     expect(within(unknownCard).queryByText(/%/)).toBeNull();
     expect(
       within(unknownCard).getByRole("button", {
@@ -724,7 +724,7 @@ describe("搜索与筛选", () => {
         mediaType: "anime",
         status: "completed",
       }),
-      makeEntry({ id: "novel", title: "小说故事", mediaType: "novel" }),
+      makeEntry({ id: "variety", title: "综艺故事", mediaType: "variety" }),
       makeEntry({
         id: "movie",
         title: "电影故事",
@@ -763,7 +763,7 @@ describe("搜索与筛选", () => {
       makeEntry({
         id: "three-body",
         title: "三体",
-        mediaType: "novel",
+        mediaType: "variety",
         status: "completed",
       }),
       makeEntry({
@@ -772,13 +772,13 @@ describe("搜索与筛选", () => {
         mediaType: "drama",
         status: "completed",
       }),
-      makeEntry({ id: "lightning", title: "球状闪电", mediaType: "novel" }),
+      makeEntry({ id: "lightning", title: "球状闪电", mediaType: "variety" }),
     ];
     mockedListEntries.mockResolvedValue(entries);
     render(<App />);
 
     await screen.findByRole("article", { name: "三体" });
-    await user.selectOptions(screen.getByLabelText("类型筛选"), "novel");
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "variety");
     await user.selectOptions(screen.getByLabelText("状态筛选"), "completed");
     expectVisibleTitles(["三体"]);
 
@@ -895,7 +895,7 @@ describe("条目管理", () => {
     const created = makeEntry({
       id: "created",
       title: "来自后端的新条目",
-      mediaType: "novel",
+      mediaType: "anime",
       currentProgress: 8,
       totalProgress: null,
       status: "completed",
@@ -912,8 +912,8 @@ describe("条目管理", () => {
     const dialog = screen.getByRole("dialog", { name: "添加条目" });
     const title = within(dialog).getByLabelText("标题");
     await user.type(title, "  来自后端的新条目  ");
-    await user.selectOptions(within(dialog).getByLabelText("类型"), "novel");
-    const currentProgress = within(dialog).getByLabelText("当前进度（章）");
+    await user.selectOptions(within(dialog).getByLabelText("类型"), "anime");
+    const currentProgress = within(dialog).getByLabelText("当前进度（集）");
     await user.clear(currentProgress);
     await user.type(currentProgress, "8");
     await user.selectOptions(within(dialog).getByLabelText("状态"), "completed");
@@ -944,7 +944,7 @@ describe("条目管理", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(mockedCreateEntry).toHaveBeenCalledWith({
       title: created.title,
-      mediaType: "novel",
+      mediaType: "anime",
       currentProgress: 8,
       totalProgress: null,
       status: "completed",
@@ -992,8 +992,8 @@ describe("条目管理", () => {
     const user = userEvent.setup();
     const target = makeEntry({
       id: "target",
-      title: "待编辑小说",
-      mediaType: "novel",
+      title: "待编辑综艺",
+      mediaType: "variety",
       currentProgress: 8,
       totalProgress: null,
       status: "tracking",
@@ -1023,10 +1023,10 @@ describe("条目管理", () => {
     );
     const dialog = screen.getByRole("dialog", { name: "编辑条目" });
     expect(within(dialog).getByLabelText("标题")).toHaveValue(target.title);
-    expect(within(dialog).getByLabelText("类型")).toHaveValue("novel");
-    expect(within(dialog).getByLabelText("当前进度（章）")).toHaveValue(8);
+    expect(within(dialog).getByLabelText("类型")).toHaveValue("variety");
+    expect(within(dialog).getByLabelText("当前进度（集）")).toHaveValue(8);
     expect(
-      within(dialog).getByLabelText("总进度（章，选填）"),
+      within(dialog).getByLabelText("总进度（集，选填）"),
     ).toHaveDisplayValue("");
     expect(within(dialog).getByLabelText("状态")).toHaveValue("tracking");
 
@@ -1138,8 +1138,8 @@ describe("条目管理", () => {
       within(dialog).getByLabelText("当前进度（部）"),
     ).toBeInTheDocument();
 
-    await user.selectOptions(within(dialog).getByLabelText("类型"), "novel");
-    const totalProgress = within(dialog).getByLabelText("总进度（章，选填）");
+    await user.selectOptions(within(dialog).getByLabelText("类型"), "variety");
+    const totalProgress = within(dialog).getByLabelText("总进度（集，选填）");
     await user.clear(totalProgress);
     expect(totalProgress).toHaveDisplayValue("");
   });
@@ -1520,13 +1520,13 @@ describe("回收站", () => {
       mediaType: "drama",
       status: "tracking",
     });
-    const trashedNovel = makeEntry({
-      id: "trash-novel",
-      title: "回收的小说",
-      mediaType: "novel",
+    const trashedVariety = makeEntry({
+      id: "trash-variety",
+      title: "回收的综艺",
+      mediaType: "variety",
       status: "completed",
     });
-    mockedListTrash.mockResolvedValue([trashedDrama, trashedNovel]);
+    mockedListTrash.mockResolvedValue([trashedDrama, trashedVariety]);
 
     render(<App />);
 
@@ -1541,20 +1541,20 @@ describe("回收站", () => {
       within(list).getByRole("article", { name: "回收的剧集" }),
     ).toBeVisible();
     expect(
-      within(list).getByRole("article", { name: "回收的小说" }),
+      within(list).getByRole("article", { name: "回收的综艺" }),
     ).toBeVisible();
 
-    await user.selectOptions(screen.getByLabelText("类型筛选"), "novel");
+    await user.selectOptions(screen.getByLabelText("类型筛选"), "variety");
     expect(
       screen.queryByRole("article", { name: "回收的剧集" }),
     ).toBeNull();
     expect(
-      screen.getByRole("article", { name: "回收的小说" }),
+      screen.getByRole("article", { name: "回收的综艺" }),
     ).toBeVisible();
 
-    await user.type(screen.getByLabelText("搜索标题"), "小说");
+    await user.type(screen.getByLabelText("搜索标题"), "综艺");
     expect(
-      screen.getByRole("article", { name: "回收的小说" }),
+      screen.getByRole("article", { name: "回收的综艺" }),
     ).toBeVisible();
     expect(
       screen.queryByRole("article", { name: "回收的剧集" }),
@@ -1846,7 +1846,7 @@ describe("短剧与条目元数据", () => {
     ).toBeInTheDocument();
     expect(mockedCreateEntry).toHaveBeenCalledWith({
       title: "合法条目",
-      mediaType: "drama",
+      mediaType: "anime",
       currentProgress: 0,
       totalProgress: null,
       status: "tracking",
@@ -2564,7 +2564,7 @@ describe("TMDB 元数据刮削", () => {
       "src",
       "https://image.tmdb.org/t/p/w500/poster.jpg",
     );
-    expect(mockedSearchTmdb).toHaveBeenCalledWith("沙丘", "drama");
+    expect(mockedSearchTmdb).toHaveBeenCalledWith("沙丘", "anime");
   });
 
   it("使用结果回填封面、评分和简介且不覆盖已有标题，其它输入保持", async () => {
@@ -2702,7 +2702,7 @@ describe("TMDB 元数据刮削", () => {
     );
     expect(within(form).getByLabelText(/总进度/)).toHaveValue(28);
     expect(within(form).getByLabelText("平台")).toHaveValue("哔哩哔哩");
-    expect(mockedSmartScrape).toHaveBeenCalledWith("葬送的芙莉莲", "drama");
+    expect(mockedSmartScrape).toHaveBeenCalledWith("葬送的芙莉莲", "anime");
     expect(mockedSearchTmdb).not.toHaveBeenCalled();
   });
 
@@ -2793,7 +2793,7 @@ describe("TMDB 元数据刮削", () => {
     expect(within(form).getByLabelText("平台")).toHaveValue("哔哩哔哩");
     expect(within(form).getByLabelText("评分")).toHaveValue(9.2);
     expect(within(form).getByLabelText("简介")).toHaveValue("AI 提供的简介");
-    expect(mockedAiScrape).toHaveBeenCalledWith("葬送的芙莉莲", "drama");
+    expect(mockedAiScrape).toHaveBeenCalledWith("葬送的芙莉莲", "anime");
     expect(mockedSmartScrape).not.toHaveBeenCalled();
   });
 

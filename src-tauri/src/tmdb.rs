@@ -48,7 +48,6 @@ pub fn prepare_search(
 
     let (path, kind) = match media_type {
         Some(MediaType::Movie) => ("movie", "movie"),
-        Some(MediaType::Novel) => return Err("小说暂不支持 TMDB 刮削".to_owned()),
         _ => ("tv", "tv"),
     };
 
@@ -239,13 +238,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "请先在设置中填写 TMDB API Key");
-    }
-
-    #[test]
-    fn novels_are_not_supported_by_tmdb() {
-        let error =
-            prepare_search(&configured_settings(), "三体", Some(MediaType::Novel)).unwrap_err();
-        assert_eq!(error, "小说暂不支持 TMDB 刮削");
     }
 
     #[test]

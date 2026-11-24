@@ -140,12 +140,6 @@ const MEDIA_TYPE_ICONS: Record<MediaType, ReactNode> = {
       <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
     </>
   ),
-  novel: (
-    <>
-      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H11a2 2 0 0 1 2 2v17a3 3 0 0 0-3-3H4V4.5Z" />
-      <path d="M20 4.5A2.5 2.5 0 0 0 17.5 2H13v19a3 3 0 0 1 3-3h4V4.5Z" />
-    </>
-  ),
   movie: (
     <>
       <path d="M4 9h16v11H4zM4 4h16v5H4zM8 4l3 5M14 4l3 5" />
@@ -564,7 +558,7 @@ function EntryFormDialog({
   const editingEntry = editor.mode === "edit" ? editor.entry : null;
   const [values, setValues] = useState<EntryFormValues>(() => ({
     title: editingEntry?.title ?? "",
-    mediaType: editingEntry?.mediaType ?? "drama",
+    mediaType: editingEntry?.mediaType ?? "anime",
     currentProgress: editingEntry ? String(editingEntry.currentProgress) : "0",
     totalProgress: editingEntry?.totalProgress
       ? String(editingEntry.totalProgress)
@@ -2188,17 +2182,13 @@ function ScrapeResultCard({
       ? "movie"
       : candidate.kind === "anime"
         ? "anime"
-        : candidate.kind === "novel"
-          ? "novel"
-          : "drama";
+        : "drama";
   const metaParts = [
     candidate.originalTitle && candidate.originalTitle !== candidate.title
       ? candidate.originalTitle
       : null,
     candidate.year ? `${candidate.year} 年` : null,
-    candidate.totalEpisodes
-      ? `共 ${candidate.totalEpisodes} ${candidate.kind === "novel" ? "章" : "集"}`
-      : null,
+    candidate.totalEpisodes ? `共 ${candidate.totalEpisodes} 集` : null,
     candidate.source ? `来源 ${candidate.source}` : null,
     candidate.platform ? `平台 ${candidate.platform}` : null,
   ].filter((part): part is string => Boolean(part));
@@ -2287,15 +2277,12 @@ function ScrapeDialog({
   const queryRef = useRef<HTMLInputElement>(null);
   const titleId = "scrape-tmdb-title";
   const missingApiKey = !settings.tmdbApiKey.trim();
-  const novelUnsupported = mediaType === "novel";
   const visibleError = smartMode
     ? error
     : missingApiKey
       ? "请先在设置中填写 TMDB API Key"
-      : novelUnsupported
-        ? "小说暂不支持 TMDB 刮削"
-        : error;
-  const canSearch = !searching && !missingApiKey && !novelUnsupported;
+      : error;
+  const canSearch = !searching && !missingApiKey;
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

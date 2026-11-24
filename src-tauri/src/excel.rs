@@ -136,7 +136,7 @@ pub(crate) fn generate_template_bytes() -> Result<Vec<u8>, String> {
         .map_err(template_error)?;
 
     // 类型、状态下拉选项，覆盖前 1000 行数据区。
-    let media_types = ["剧集", "番剧", "综艺", "小说", "电影", "短剧"];
+    let media_types = ["剧集", "番剧", "综艺", "电影", "短剧"];
     let statuses = ["在追", "待看", "已完成", "已弃剧"];
     let platforms = [
         "腾讯视频",
@@ -520,7 +520,7 @@ mod tests {
     fn parses_positional_workbook_without_header() {
         let bytes = make_workbook(&[
             &["漫长的季节", "剧集", "", "3/12", "腾讯视频", "9.4"],
-            &["诡秘之主", "小说", "", "第12章", "", "9.1"],
+            &["流浪地球", "电影", "", "1/1", "", "8.5"],
         ]);
         let parsed = parse_workbook(&bytes, MediaType::Drama).unwrap();
         assert_eq!(parsed.len(), 2);
@@ -532,8 +532,8 @@ mod tests {
             Some("腾讯视频")
         );
         assert_eq!(parsed[0].1.as_ref().unwrap().rating, Some(9.4));
-        assert_eq!(parsed[1].1.as_ref().unwrap().media_type, MediaType::Novel);
-        assert_eq!(parsed[1].1.as_ref().unwrap().current_progress, 12);
+        assert_eq!(parsed[1].1.as_ref().unwrap().media_type, MediaType::Movie);
+        assert_eq!(parsed[1].1.as_ref().unwrap().current_progress, 1);
     }
 
     #[test]

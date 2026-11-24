@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::settings::{normalize_library_view, normalize_theme, AppSettings};
 
-const DATABASE_VERSION: u32 = 6;
+const DATABASE_VERSION: u32 = 7;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -23,7 +23,7 @@ const ENTRIES_V2_DEFINITION: &str = "
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL CHECK (length(trim(title)) > 0),
     media_type TEXT NOT NULL CHECK (
-        media_type IN ('drama', 'anime', 'variety', 'novel', 'movie', 'short_drama')
+        media_type IN ('drama', 'anime', 'variety', 'movie', 'short_drama')
     ),
     current_progress INTEGER NOT NULL CHECK (
         typeof(current_progress) = 'integer' AND current_progress >= 0
@@ -76,7 +76,6 @@ pub enum MediaType {
     Drama,
     Anime,
     Variety,
-    Novel,
     Movie,
     #[serde(rename = "short_drama")]
     ShortDrama,
@@ -88,16 +87,15 @@ impl MediaType {
             Self::Drama => "drama",
             Self::Anime => "anime",
             Self::Variety => "variety",
-            Self::Novel => "novel",
             Self::Movie => "movie",
             Self::ShortDrama => "short_drama",
         }
     }
 
-    /// 进度单位：小说按“章”，其余内容按“集”。
+    /// 进度单位：电影按“部”，其余内容按“集”。
     pub fn unit(self) -> &'static str {
         match self {
-            Self::Novel => "章",
+            Self::Movie => "部",
             _ => "集",
         }
     }
@@ -107,9 +105,9 @@ impl MediaType {
             "drama" => Ok(Self::Drama),
             "anime" => Ok(Self::Anime),
             "variety" => Ok(Self::Variety),
-            "novel" => Ok(Self::Novel),
             "movie" => Ok(Self::Movie),
             "short_drama" => Ok(Self::ShortDrama),
+            "novel" => Ok(Self::Drama),
             _ => Err(format!("数据库包含未知媒体类型：{value}")),
         }
     }
@@ -320,7 +318,7 @@ pub(crate) fn parse_media_type_field(raw: &str) -> Result<MediaType, String> {
         "drama" | "剧集" | "电视剧" => Ok(MediaType::Drama),
         "anime" | "番剧" | "动漫" | "动画" => Ok(MediaType::Anime),
         "variety" | "综艺" => Ok(MediaType::Variety),
-        "novel" | "小说" => Ok(MediaType::Novel),
+        "novel" | "小说" => Err("小说类型已不再支持，请改用剧集或电影".to_owned()),
         "movie" | "电影" => Ok(MediaType::Movie),
         "short_drama" | "短剧" => Ok(MediaType::ShortDrama),
         other => Err(format!("未知类型：{other}")),
@@ -463,7 +461,9 @@ impl Database {
                         deleted_at
                     )
                     SELECT
-                        id, title, media_type, current_progress, total_progress, status,
+                        id, title,
+                        CASE WHEN media_type = 'novel' THEN 'drama' ELSE media_type END,
+                        current_progress, total_progress, status,
                         NULL, NULL, NULL, NULL, NULL, created_at, updated_at, NULL
                     FROM entries;
 
@@ -493,7 +493,9 @@ impl Database {
                         deleted_at
                     )
                     SELECT
-                        id, title, media_type, current_progress, total_progress, status,
+                        id, title,
+                        CASE WHEN media_type = 'novel' THEN 'drama' ELSE media_type END,
+                        current_progress, total_progress, status,
                         CAST(season AS TEXT), rating, platform, cover_url, overview,
                         created_at, updated_at, deleted_at
                     FROM entries;
@@ -524,13 +526,48 @@ impl Database {
                         deleted_at
                     )
                     SELECT
-                        id, title, media_type, current_progress, total_progress, status,
+                        id, title,
+                        CASE WHEN media_type = 'novel' THEN 'drama' ELSE media_type END,
+                        current_progress, total_progress, status,
                         CAST(season AS TEXT), rating, platform, cover_url, overview,
                         created_at, updated_at, deleted_at
                     FROM entries;
 
                     DROP TABLE entries;
                     ALTER TABLE entries_v6 RENAME TO entries;
+                    ",
+                )
+                .map_err(|error| format!("无法升级数据库表：{error}"))?;
+        } else if entries_media_type_allows_novel(&transaction)
+            .map_err(|error| format!("无法检查数据库表结构：{error}"))?
+        {
+            // v6 → v7：移除“小说”类型，历史小说条目归并为剧集。
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS entries_v7;")
+                .map_err(|error| format!("无法清理旧迁移表：{error}"))?;
+            transaction
+                .execute_batch(&format!(
+                    "CREATE TABLE entries_v7 ({ENTRIES_V2_DEFINITION});"
+                ))
+                .map_err(|error| format!("无法创建新版数据库表：{error}"))?;
+            transaction
+                .execute_batch(
+                    "
+                    INSERT INTO entries_v7 (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    )
+                    SELECT
+                        id, title,
+                        CASE WHEN media_type = 'novel' THEN 'drama' ELSE media_type END,
+                        current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview,
+                        created_at, updated_at, deleted_at
+                    FROM entries;
+
+                    DROP TABLE entries;
+                    ALTER TABLE entries_v7 RENAME TO entries;
                     ",
                 )
                 .map_err(|error| format!("无法升级数据库表：{error}"))?;
@@ -1267,6 +1304,17 @@ fn entries_season_allows_text(connection: &Connection) -> rusqlite::Result<bool>
     Ok(definition.is_some_and(|text| text.contains("season TEXT")))
 }
 
+fn entries_media_type_allows_novel(connection: &Connection) -> rusqlite::Result<bool> {
+    let definition: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(definition.is_some_and(|text| text.contains("'novel'")))
+}
+
 fn query_entries(
     connection: &Connection,
     sql: &str,
@@ -1537,7 +1585,6 @@ mod tests {
             (MediaType::Drama, "drama"),
             (MediaType::Anime, "anime"),
             (MediaType::Variety, "variety"),
-            (MediaType::Novel, "novel"),
             (MediaType::Movie, "movie"),
             (MediaType::ShortDrama, "short_drama"),
         ];
@@ -1588,7 +1635,7 @@ mod tests {
         assert_eq!(decoded.platform, None);
         assert_eq!(decoded.cover_url, None);
         assert_eq!(decoded.overview, None);
-        assert_eq!(database.list_entries().unwrap().len(), 6);
+        assert_eq!(database.list_entries().unwrap().len(), 5);
     }
 
     #[test]
@@ -1597,8 +1644,7 @@ mod tests {
         assert_eq!(MediaType::Drama.unit(), "集");
         assert_eq!(MediaType::Anime.unit(), "集");
         assert_eq!(MediaType::Variety.unit(), "集");
-        assert_eq!(MediaType::Movie.unit(), "集");
-        assert_eq!(MediaType::Novel.unit(), "章");
+        assert_eq!(MediaType::Movie.unit(), "部");
         assert_eq!(
             serde_json::to_value(MediaType::ShortDrama).unwrap(),
             Value::String("short_drama".to_owned())
@@ -2533,7 +2579,8 @@ mod tests {
 
         let preserved = entries.iter().find(|entry| entry.id == "v1-a").unwrap();
         assert_eq!(preserved.title, "旧版条目 A");
-        assert_eq!(preserved.media_type, MediaType::Novel);
+        // 已移除“小说”类型，历史数据在升级时归并为剧集。
+        assert_eq!(preserved.media_type, MediaType::Drama);
         assert_eq!(preserved.current_progress, 12);
         assert_eq!(preserved.total_progress, Some(30));
         assert_eq!(preserved.status, EntryStatus::Tracking);
@@ -2695,7 +2742,7 @@ mod tests {
             .import_excel(
                 &excel_base64(&[
                     &["漫长的季节", "剧集", "", "3/12", "腾讯视频", "9.4"],
-                    &["诡秘之主", "小说", "", "第12章", "", "9.1"],
+                    &["流浪地球", "电影", "", "1/1", "", "8.5"],
                 ]),
                 None,
             )
@@ -2707,9 +2754,9 @@ mod tests {
         assert_eq!(drama.total_progress, Some(12));
         assert_eq!(drama.platform.as_deref(), Some("腾讯视频"));
         assert_eq!(drama.rating, Some(9.4));
-        let novel = &report.entries[1];
-        assert_eq!(novel.media_type, MediaType::Novel);
-        assert_eq!(novel.current_progress, 12);
+        let movie = &report.entries[1];
+        assert_eq!(movie.media_type, MediaType::Movie);
+        assert_eq!(movie.current_progress, 1);
     }
 
     #[test]
@@ -2771,11 +2818,11 @@ mod tests {
         let with_default = database
             .import_excel(
                 &excel_base64(&[&["标题"], &["无类型内容"]]),
-                Some(MediaType::Novel),
+                Some(MediaType::Anime),
             )
             .unwrap();
         assert_eq!(with_default.imported, 1);
-        assert_eq!(with_default.entries[0].media_type, MediaType::Novel);
+        assert_eq!(with_default.entries[0].media_type, MediaType::Anime);
 
         let without_default = database
             .import_excel(&excel_base64(&[&["标题"], &["另一条"]]), None)

@@ -14,7 +14,6 @@ const BANGUMI_USER_AGENT: &str = "CatchUp/0.1 (Tauri app; +https://github.com/ca
 const BANGUMI_SEARCH_URL: &str = "https://api.bgm.tv/v0/search/subjects?limit=10";
 const ANILIST_ENDPOINT: &str = "https://graphql.anilist.co";
 const TVMAZE_SEARCH_URL: &str = "https://api.tvmaze.com/search/shows";
-const OPEN_LIBRARY_SEARCH_URL: &str = "https://openlibrary.org/search.json";
 const OVERVIEW_LIMIT: usize = 800;
 
 const ANILIST_QUERY: &str = r#"
@@ -46,7 +45,6 @@ enum Provider {
     Bangumi(u8),
     AniList(&'static str),
     Tvmaze,
-    OpenLibrary,
     Tmdb(MediaType),
 }
 
@@ -54,7 +52,6 @@ impl Provider {
     fn kind(self) -> &'static str {
         match self {
             Self::Bangumi(2) | Self::AniList("ANIME") => "anime",
-            Self::Bangumi(1) | Self::AniList("MANGA") | Self::OpenLibrary => "novel",
             Self::Tmdb(MediaType::Movie) => "movie",
             _ => "tv",
         }
@@ -64,11 +61,6 @@ impl Provider {
 fn providers_for(media_type: Option<MediaType>) -> Vec<Provider> {
     match media_type {
         Some(MediaType::Anime) => vec![Provider::Bangumi(2), Provider::AniList("ANIME")],
-        Some(MediaType::Novel) => vec![
-            Provider::Bangumi(1),
-            Provider::AniList("MANGA"),
-            Provider::OpenLibrary,
-        ],
         Some(MediaType::Movie) => vec![Provider::Tmdb(MediaType::Movie)],
         other => vec![
             Provider::Tmdb(other.unwrap_or(MediaType::Drama)),
@@ -172,7 +164,6 @@ async fn fetch(
         }
         Provider::AniList(media) => fetch_anilist(client, query, media, provider.kind()).await,
         Provider::Tvmaze => fetch_tvmaze(client, query).await,
-        Provider::OpenLibrary => fetch_open_library(client, query).await,
         Provider::Tmdb(media_type) => search_tmdb(settings, query, Some(media_type)).await,
     }
 }
@@ -494,100 +485,6 @@ fn map_tvmaze_response(body: &str) -> Result<Vec<ScrapeCandidate>, String> {
         .collect())
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct OpenLibraryResponse {
-    #[serde(default)]
-    docs: Option<Vec<OpenLibraryDoc>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OpenLibraryDoc {
-    #[serde(default)]
-    key: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    author_name: Option<Vec<String>>,
-    #[serde(default)]
-    first_publish_year: Option<u32>,
-    #[serde(default)]
-    cover_i: Option<i64>,
-    #[serde(default)]
-    ratings_average: Option<f64>,
-}
-
-async fn fetch_open_library(
-    client: &reqwest::Client,
-    query: &str,
-) -> Result<Vec<ScrapeCandidate>, String> {
-    let response = client
-        .get(OPEN_LIBRARY_SEARCH_URL)
-        .query(&[
-            ("q", query),
-            ("limit", "10"),
-            (
-                "fields",
-                "key,title,author_name,first_publish_year,cover_i,ratings_average",
-            ),
-        ])
-        .send()
-        .await
-        .map_err(|error| describe_request_error("Open Library", &error))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("Open Library 搜索失败（HTTP {status}）"));
-    }
-    let body = response
-        .text()
-        .await
-        .map_err(|error| describe_request_error("Open Library", &error))?;
-    map_open_library_response(&body)
-}
-
-fn map_open_library_response(body: &str) -> Result<Vec<ScrapeCandidate>, String> {
-    let response: OpenLibraryResponse = serde_json::from_str(body)
-        .map_err(|error| format!("解析 Open Library 返回内容失败：{error}"))?;
-    Ok(response
-        .docs
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|doc| {
-            let title = non_empty(doc.title)?;
-            let author = doc
-                .author_name
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| name.trim().to_owned())
-                .filter(|name| !name.is_empty())
-                .collect::<Vec<_>>();
-            let overview = (!author.is_empty()).then(|| format!("作者：{}", author.join("、")));
-            Some(ScrapeCandidate {
-                source_id: doc
-                    .key
-                    .as_deref()
-                    .map(stable_id)
-                    .or_else(|| doc.cover_i.map(|cover| cover as u32))
-                    .unwrap_or(0),
-                title,
-                original_title: None,
-                year: doc.first_publish_year,
-                poster_url: doc
-                    .cover_i
-                    .map(|cover| format!("https://covers.openlibrary.org/b/id/{cover}-L.jpg")),
-                rating: doc
-                    .ratings_average
-                    .filter(|average| *average > 0.0)
-                    .map(|average| round_rating(average * 2.0)),
-                overview,
-                kind: "novel".to_owned(),
-                source: Some("Open Library".to_owned()),
-                total_episodes: None,
-                platform: None,
-            })
-        })
-        .collect())
-}
-
 fn rank(candidates: Vec<ScrapeCandidate>, key: &str) -> Vec<ScrapeCandidate> {
     let mut scored = candidates
         .into_iter()
@@ -675,7 +572,6 @@ fn source_priority(source: Option<&str>) -> i32 {
         Some("TMDB") | Some("Bangumi") => 6,
         Some("AniList") => 4,
         Some("TVMaze") => 3,
-        Some("Open Library") => 2,
         Some("AI") => 1,
         _ => 0,
     }
@@ -788,15 +684,6 @@ fn strip_html(input: &str) -> String {
     decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn stable_id(text: &str) -> u32 {
-    let mut hash: u32 = 0x811c9dc5;
-    for byte in text.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
-}
-
 fn describe_request_error(provider: &str, error: &reqwest::Error) -> String {
     if error.is_timeout() {
         return format!("{provider} 请求超时（{REQUEST_TIMEOUT_SECONDS} 秒），请稍后重试。");
@@ -816,14 +703,6 @@ mod tests {
         assert_eq!(
             providers_for(Some(MediaType::Anime)),
             vec![Provider::Bangumi(2), Provider::AniList("ANIME")]
-        );
-        assert_eq!(
-            providers_for(Some(MediaType::Novel)),
-            vec![
-                Provider::Bangumi(1),
-                Provider::AniList("MANGA"),
-                Provider::OpenLibrary
-            ]
         );
         assert_eq!(
             providers_for(Some(MediaType::Movie)),
@@ -954,39 +833,9 @@ mod tests {
         assert_eq!(candidate.kind, "tv");
     }
 
-    #[test]
-    fn open_library_response_builds_cover_and_double_rating() {
-        let body = serde_json::json!({
-            "docs": [
-                {
-                    "key": "/works/OL123W",
-                    "title": "The Three-Body Problem",
-                    "author_name": ["Liu Cixin"],
-                    "first_publish_year": 2008,
-                    "cover_i": 8231856,
-                    "ratings_average": 4.25
-                }
-            ]
-        })
-        .to_string();
-
-        let candidates = map_open_library_response(&body).unwrap();
-        assert_eq!(candidates.len(), 1);
-        let candidate = &candidates[0];
-        assert_eq!(candidate.title, "The Three-Body Problem");
-        assert_eq!(candidate.year, Some(2008));
-        assert_eq!(candidate.rating, Some(8.5));
-        assert_eq!(
-            candidate.poster_url.as_deref(),
-            Some("https://covers.openlibrary.org/b/id/8231856-L.jpg")
-        );
-        assert_eq!(candidate.overview.as_deref(), Some("作者：Liu Cixin"));
-        assert_eq!(candidate.kind, "novel");
-    }
-
     fn candidate(title: &str, year: Option<u32>, source: &str) -> ScrapeCandidate {
         ScrapeCandidate {
-            source_id: stable_id(title),
+            source_id: 0,
             title: title.to_owned(),
             original_title: None,
             year,

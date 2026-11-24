@@ -512,51 +512,6 @@ async function fetchWebTvmaze(query: string): Promise<ScrapeCandidate[]> {
   });
 }
 
-interface OpenLibraryDocJson {
-  key?: string;
-  title?: string;
-  author_name?: string[];
-  first_publish_year?: number;
-  cover_i?: number;
-  ratings_average?: number;
-}
-
-async function fetchWebOpenLibrary(query: string): Promise<ScrapeCandidate[]> {
-  const fields =
-    "key,title,author_name,first_publish_year,cover_i,ratings_average";
-  const response = await fetch(
-    `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=10&fields=${fields}`,
-  );
-  if (!response.ok) {
-    throw new Error(`Open Library 搜索失败（HTTP ${response.status}）`);
-  }
-  const payload = (await response.json()) as { docs?: OpenLibraryDocJson[] };
-  return (payload.docs ?? []).flatMap((item) => {
-    const title = trimOrNull(item.title);
-    if (!title) return [];
-    const authors = (item.author_name ?? [])
-      .map((name) => name.trim())
-      .filter(Boolean);
-    const average = item.ratings_average ?? 0;
-    return [
-      {
-        sourceId: item.cover_i ?? 0,
-        title,
-        originalTitle: null,
-        year: item.first_publish_year ?? null,
-        posterUrl: item.cover_i
-          ? `https://covers.openlibrary.org/b/id/${item.cover_i}-L.jpg`
-          : null,
-        rating: average > 0 ? roundOne(average * 2) : null,
-        overview: authors.length > 0 ? `作者：${authors.join("、")}` : null,
-        kind: "novel" as const,
-        source: "Open Library",
-        totalEpisodes: null,
-      },
-    ];
-  });
-}
-
 function normalizeScrapeKey(raw: string): string {
   return raw
     .normalize("NFKC")
@@ -575,8 +530,6 @@ function scrapeSourcePriority(source: string | null | undefined): number {
       return 3;
     case "Open Library":
       return 2;
-    case "AI":
-      return 1;
     default:
       return 0;
   }
@@ -644,7 +597,7 @@ interface AiPayloadJson {
 }
 
 const AI_SYSTEM_PROMPT =
-  "你是影视、动漫、小说元数据助手。根据用户给出的作品名称与类型，返回真实存在的元数据。" +
+  "你是影视、动漫元数据助手。根据用户给出的作品名称与类型，返回真实存在的元数据。" +
   "只输出一个 JSON 对象，不要输出 Markdown 代码块或解释文字。字段如下：" +
   "title（中文标题，字符串）、originalTitle（原名，字符串或 null）、year（首播或出版年份，整数或 null）、" +
   "rating（0 到 10 的评分，数字或 null）、overview（不超过 150 字的中文简介，字符串或 null）、" +
@@ -655,8 +608,6 @@ function aiMediaLabel(mediaType?: MediaType): string {
   switch (mediaType) {
     case "anime":
       return "番剧";
-    case "novel":
-      return "小说";
     case "movie":
       return "电影";
     case "variety":
@@ -673,7 +624,6 @@ function aiMediaLabel(mediaType?: MediaType): string {
 function aiCandidateKind(mediaType?: MediaType): ScrapeCandidate["kind"] {
   if (mediaType === "movie") return "movie";
   if (mediaType === "anime") return "anime";
-  if (mediaType === "novel") return "novel";
   return "tv";
 }
 
@@ -826,10 +776,6 @@ export async function smartScrapeWeb(
   if (mediaType === "anime") {
     tasks.push(fetchWebBangumi(trimmed, 2, "anime"));
     tasks.push(fetchWebAniList(trimmed, "ANIME", "anime"));
-  } else if (mediaType === "novel") {
-    tasks.push(fetchWebBangumi(trimmed, 1, "novel"));
-    tasks.push(fetchWebAniList(trimmed, "MANGA", "novel"));
-    tasks.push(fetchWebOpenLibrary(trimmed));
   } else if (mediaType === "movie") {
     tasks.push(searchWebTmdb(trimmed, "movie"));
   } else {
@@ -923,8 +869,6 @@ export async function importWebExcel(
     anime: "anime",
     综艺: "variety",
     variety: "variety",
-    小说: "novel",
-    novel: "novel",
     电影: "movie",
     movie: "movie",
     短剧: "short_drama",

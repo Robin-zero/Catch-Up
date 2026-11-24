@@ -81,11 +81,6 @@
   color: #d2a05a;
 }
 
-[data-theme="dark"] .entry__tile--novel {
-  background: #1f2c26;
-  color: #6fbf96;
-}
-
 [data-theme="dark"] .entry__tile--movie {
   background: #27222f;
   color: #a98bd1;
@@ -390,10 +385,6 @@ svg {
 
 .sidebar__type-dot--variety {
   background: #b07a2b;
-}
-
-.sidebar__type-dot--novel {
-  background: #2f7d5a;
 }
 
 .sidebar__type-dot--movie {
@@ -1065,11 +1056,6 @@ svg {
 .entry__tile--variety {
   background: #faf1e2;
   color: #a4711f;
-}
-
-.entry__tile--novel {
-  background: #e9f4ee;
-  color: #2f7d5a;
 }
 
 .entry__tile--movie {

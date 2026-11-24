@@ -11,7 +11,7 @@ const AI_TIMEOUT_SECONDS: u64 = 30;
 const OVERVIEW_LIMIT: usize = 800;
 const PLATFORM_LIMIT: usize = 60;
 
-const SYSTEM_PROMPT: &str = "你是影视、动漫、小说元数据助手。根据用户给出的作品名称与类型，返回真实存在的元数据。\
+const SYSTEM_PROMPT: &str = "你是影视、动漫元数据助手。根据用户给出的作品名称与类型，返回真实存在的元数据。\
 只输出一个 JSON 对象，不要输出 Markdown 代码块或解释文字。字段如下：\
 title（中文标题，字符串）、originalTitle（原名，字符串或 null）、year（首播或出版年份，整数或 null）、\
 rating（0 到 10 的评分，数字或 null）、overview（不超过 150 字的中文简介，字符串或 null）、\
@@ -95,7 +95,6 @@ fn media_label(media_type: Option<MediaType>) -> &'static str {
         Some(MediaType::Drama) => "剧集",
         Some(MediaType::Anime) => "番剧",
         Some(MediaType::Variety) => "综艺",
-        Some(MediaType::Novel) => "小说",
         Some(MediaType::Movie) => "电影",
         Some(MediaType::ShortDrama) => "短剧",
         None => "影视作品",
@@ -106,7 +105,6 @@ fn candidate_kind(media_type: Option<MediaType>) -> &'static str {
     match media_type {
         Some(MediaType::Movie) => "movie",
         Some(MediaType::Anime) => "anime",
-        Some(MediaType::Novel) => "novel",
         _ => "tv",
     }
 }

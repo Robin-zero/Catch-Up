@@ -2,7 +2,6 @@ export type MediaType =
   | "drama"
   | "anime"
   | "variety"
-  | "novel"
   | "movie"
   | "short_drama";
 
@@ -80,7 +79,7 @@ export interface ScrapeCandidate {
   posterUrl: string | null;
   rating: number | null;
   overview: string | null;
-  kind: "movie" | "tv" | "anime" | "novel";
+  kind: "movie" | "tv" | "anime";
   source?: string | null;
   totalEpisodes?: number | null;
   platform?: string | null;
@@ -108,7 +107,6 @@ export const MEDIA_TYPE_LABELS: Record<MediaType, string> = {
   drama: "剧集",
   anime: "番剧",
   variety: "综艺",
-  novel: "小说",
   movie: "电影",
   short_drama: "短剧",
 };
@@ -117,7 +115,6 @@ export const MEDIA_TYPE_UNITS: Record<MediaType, string> = {
   drama: "集",
   anime: "集",
   variety: "集",
-  novel: "章",
   movie: "部",
   short_drama: "集",
 };

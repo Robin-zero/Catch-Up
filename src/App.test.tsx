@@ -25,6 +25,7 @@ import {
   saveSettings,
   searchTmdb,
   setEntryStatus,
+  smartScrape,
   syncNow,
   updateEntry,
 } from "./api";
@@ -57,6 +58,7 @@ vi.mock("./api", () => ({
   saveCoverImage: vi.fn(),
   cacheCoverFromUrl: vi.fn((url: string) => Promise.resolve(url)),
   searchTmdb: vi.fn(),
+  smartScrape: vi.fn(),
   syncNow: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
@@ -80,6 +82,7 @@ const mockedGetSettings = vi.mocked(getSettings);
 const mockedSaveSettings = vi.mocked(saveSettings);
 const mockedSaveCoverImage = vi.mocked(saveCoverImage);
 const mockedSearchTmdb = vi.mocked(searchTmdb);
+const mockedSmartScrape = vi.mocked(smartScrape);
 const mockedSyncNow = vi.mocked(syncNow);
 
 function makeSyncReport(overrides: Partial<SyncReport> = {}): SyncReport {
@@ -133,6 +136,7 @@ beforeEach(() => {
   mockedGetSettings.mockResolvedValue({ ...DEFAULT_SETTINGS });
   mockedSaveSettings.mockReset();
   mockedSearchTmdb.mockReset();
+  mockedSmartScrape.mockReset();
   mockedSyncNow.mockReset();
   mockedSyncNow.mockResolvedValue(makeSyncReport());
 });
@@ -2585,6 +2589,82 @@ describe("TMDB 元数据刮削", () => {
       ),
     ).toBeInTheDocument();
     expect(within(scrape).getByRole("button", { name: "搜索" })).toBeEnabled();
+  });
+
+  it("智能补全命中时直接回填资料并提示来源", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "葬送的芙莉莲");
+    mockedSmartScrape.mockResolvedValue({
+      candidates: [
+        {
+          ...candidate,
+          sourceId: 302267,
+          title: "葬送的芙莉莲",
+          originalTitle: "Sousou no Frieren",
+          year: 2023,
+          rating: 8.9,
+          overview: "勇者一行击败魔王后的故事。",
+          kind: "anime",
+          source: "Bangumi",
+          totalEpisodes: 28,
+        },
+      ],
+      confident: true,
+    });
+
+    await user.click(within(form).getByRole("button", { name: "智能补全" }));
+
+    expect(
+      await within(form).findByText("已根据 Bangumi 自动补全，可继续修改。"),
+    ).toBeInTheDocument();
+    expect(within(form).getByLabelText("评分")).toHaveValue(8.9);
+    expect(within(form).getByLabelText("简介")).toHaveValue(
+      "勇者一行击败魔王后的故事。",
+    );
+    expect(within(form).getByLabelText(/总进度/)).toHaveValue(28);
+    expect(mockedSmartScrape).toHaveBeenCalledWith("葬送的芙莉莲", "drama");
+    expect(mockedSearchTmdb).not.toHaveBeenCalled();
+  });
+
+  it("智能补全不确定时打开候选对话框", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "沙丘");
+    mockedSmartScrape.mockResolvedValue({
+      candidates: [candidate],
+      confident: false,
+    });
+
+    await user.click(within(form).getByRole("button", { name: "智能补全" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "智能补全结果",
+    });
+    expect(
+      within(dialog).getByRole("article", { name: "沙丘 2" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("搜索标题")).toBeNull();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "使用此结果" }),
+    );
+    expect(within(form).getByLabelText("封面")).toHaveValue(
+      "https://image.tmdb.org/t/p/w500/poster.jpg",
+    );
+  });
+
+  it("标题为空时智能补全先提示填写标题", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const form = await openCreateForm(user);
+
+    await user.click(within(form).getByRole("button", { name: "智能补全" }));
+
+    expect(within(form).getByText("请先填写标题。")).toBeInTheDocument();
+    expect(mockedSmartScrape).not.toHaveBeenCalled();
   });
 });
 

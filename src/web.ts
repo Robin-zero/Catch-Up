@@ -7,6 +7,7 @@ import type {
   MediaEntry,
   MediaType,
   ScrapeCandidate,
+  SmartScrapeResult,
   SyncReport,
 } from "./types";
 
@@ -323,8 +324,373 @@ export async function searchWebTmdb(
       rating: item.vote_average ?? null,
       overview: item.overview ?? null,
       kind: tmdbType === "movie" ? "movie" : "tv",
+      source: "TMDB",
+      totalEpisodes: null,
     };
   });
+}
+
+function trimOrNull(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  return text ? text : null;
+}
+
+function roundOne(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function parseYear(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const year = Number(value.slice(0, 4));
+  return Number.isInteger(year) && year > 0 ? year : null;
+}
+
+function cleanHtmlText(raw: string | null | undefined): string | null {
+  if (!raw || typeof document === "undefined") return null;
+  const container = document.createElement("div");
+  container.innerHTML = raw;
+  const text = (container.textContent ?? "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 800) : null;
+}
+
+interface BangumiSubjectJson {
+  id?: number;
+  name?: string;
+  name_cn?: string;
+  summary?: string;
+  date?: string;
+  images?: { large?: string };
+  rating?: { score?: number };
+  eps?: number;
+  volumes?: number;
+}
+
+async function fetchWebBangumi(
+  query: string,
+  subjectType: number,
+  kind: ScrapeCandidate["kind"],
+): Promise<ScrapeCandidate[]> {
+  const response = await fetch("https://api.bgm.tv/v0/search/subjects?limit=10", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keyword: query, filter: { type: [subjectType] } }),
+  });
+  if (!response.ok) {
+    throw new Error(`Bangumi 搜索失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as { data?: BangumiSubjectJson[] };
+  return (payload.data ?? []).flatMap((item) => {
+    const originalTitle = trimOrNull(item.name);
+    const title = trimOrNull(item.name_cn) ?? originalTitle;
+    if (!title) return [];
+    const score = item.rating?.score ?? 0;
+    const episodes = item.eps ?? item.volumes ?? null;
+    return [
+      {
+        sourceId: item.id ?? 0,
+        title,
+        originalTitle,
+        year: parseYear(item.date),
+        posterUrl: trimOrNull(item.images?.large),
+        rating: score > 0 ? roundOne(score) : null,
+        overview: cleanHtmlText(item.summary),
+        kind,
+        source: "Bangumi",
+        totalEpisodes: episodes && episodes > 0 ? episodes : null,
+      },
+    ];
+  });
+}
+
+interface AniListMediaJson {
+  id?: number;
+  title?: { romaji?: string; native?: string; english?: string };
+  startDate?: { year?: number };
+  coverImage?: { large?: string };
+  averageScore?: number;
+  description?: string;
+  episodes?: number;
+  chapters?: number;
+}
+
+const ANILIST_QUERY = `query ($search: String, $type: MediaType) {
+  Page(perPage: 10) {
+    media(search: $search, type: $type, sort: SEARCH_MATCH) {
+      id
+      title { romaji native english }
+      startDate { year }
+      coverImage { large }
+      averageScore
+      description(asHtml: false)
+      episodes
+      chapters
+    }
+  }
+}`;
+
+async function fetchWebAniList(
+  query: string,
+  media: "ANIME" | "MANGA",
+  kind: ScrapeCandidate["kind"],
+): Promise<ScrapeCandidate[]> {
+  const response = await fetch("https://graphql.anilist.co", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: ANILIST_QUERY,
+      variables: { search: query, type: media },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`AniList 搜索失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as {
+    data?: { Page?: { media?: AniListMediaJson[] } };
+  };
+  return (payload.data?.Page?.media ?? []).flatMap((item) => {
+    const native = trimOrNull(item.title?.native);
+    const romaji = trimOrNull(item.title?.romaji);
+    const english = trimOrNull(item.title?.english);
+    const title = english ?? romaji ?? native;
+    if (!title) return [];
+    const score = item.averageScore ?? 0;
+    const episodes = item.episodes ?? item.chapters ?? null;
+    return [
+      {
+        sourceId: item.id ?? 0,
+        title,
+        originalTitle: romaji ?? native,
+        year: item.startDate?.year ?? null,
+        posterUrl: trimOrNull(item.coverImage?.large),
+        rating: score > 0 ? roundOne(score / 10) : null,
+        overview: cleanHtmlText(item.description),
+        kind,
+        source: "AniList",
+        totalEpisodes: episodes && episodes > 0 ? episodes : null,
+      },
+    ];
+  });
+}
+
+interface TvmazeShowJson {
+  id?: number;
+  name?: string;
+  premiered?: string;
+  image?: { medium?: string; original?: string };
+  rating?: { average?: number };
+  summary?: string;
+}
+
+async function fetchWebTvmaze(query: string): Promise<ScrapeCandidate[]> {
+  const response = await fetch(
+    `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`TVMaze 搜索失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as Array<{ show?: TvmazeShowJson }>;
+  return payload.flatMap((item) => {
+    const show = item.show;
+    const title = trimOrNull(show?.name);
+    if (!show || !title) return [];
+    const average = show.rating?.average ?? 0;
+    return [
+      {
+        sourceId: show.id ?? 0,
+        title,
+        originalTitle: null,
+        year: parseYear(show.premiered),
+        posterUrl:
+          trimOrNull(show.image?.original) ?? trimOrNull(show.image?.medium),
+        rating: average > 0 ? roundOne(average) : null,
+        overview: cleanHtmlText(show.summary),
+        kind: "tv" as const,
+        source: "TVMaze",
+        totalEpisodes: null,
+      },
+    ];
+  });
+}
+
+interface OpenLibraryDocJson {
+  key?: string;
+  title?: string;
+  author_name?: string[];
+  first_publish_year?: number;
+  cover_i?: number;
+  ratings_average?: number;
+}
+
+async function fetchWebOpenLibrary(query: string): Promise<ScrapeCandidate[]> {
+  const fields =
+    "key,title,author_name,first_publish_year,cover_i,ratings_average";
+  const response = await fetch(
+    `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=10&fields=${fields}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Open Library 搜索失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as { docs?: OpenLibraryDocJson[] };
+  return (payload.docs ?? []).flatMap((item) => {
+    const title = trimOrNull(item.title);
+    if (!title) return [];
+    const authors = (item.author_name ?? [])
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const average = item.ratings_average ?? 0;
+    return [
+      {
+        sourceId: item.cover_i ?? 0,
+        title,
+        originalTitle: null,
+        year: item.first_publish_year ?? null,
+        posterUrl: item.cover_i
+          ? `https://covers.openlibrary.org/b/id/${item.cover_i}-L.jpg`
+          : null,
+        rating: average > 0 ? roundOne(average * 2) : null,
+        overview: authors.length > 0 ? `作者：${authors.join("、")}` : null,
+        kind: "novel" as const,
+        source: "Open Library",
+        totalEpisodes: null,
+      },
+    ];
+  });
+}
+
+function normalizeScrapeKey(raw: string): string {
+  return raw
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function scrapeSourcePriority(source: string | null | undefined): number {
+  switch (source) {
+    case "TMDB":
+    case "Bangumi":
+      return 6;
+    case "AniList":
+      return 4;
+    case "TVMaze":
+      return 3;
+    case "Open Library":
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+function scrapeMatchScore(
+  candidate: ScrapeCandidate,
+  key: string,
+): { exact: boolean; score: number } {
+  if (!key) return { exact: false, score: 20 };
+  let best = 20;
+  for (const title of [candidate.title, candidate.originalTitle]) {
+    const normalized = normalizeScrapeKey(title ?? "");
+    if (!normalized) continue;
+    if (normalized === key) return { exact: true, score: 100 };
+    if (normalized.includes(key) || key.includes(normalized)) {
+      best = Math.max(best, 55);
+    }
+  }
+  return { exact: false, score: best };
+}
+
+function rankScrapeCandidates(
+  candidates: ScrapeCandidate[],
+  query: string,
+): ScrapeCandidate[] {
+  const key = normalizeScrapeKey(query);
+  const ranked = candidates.map((candidate) => {
+    const match = scrapeMatchScore(candidate, key);
+    let score = match.score + scrapeSourcePriority(candidate.source);
+    if (candidate.posterUrl) score += 10;
+    if (candidate.overview) score += 5;
+    if (candidate.rating !== null) score += 3;
+    if (candidate.year) score += 2;
+    if (candidate.totalEpisodes) score += 3;
+    return { candidate, exact: match.exact, score };
+  });
+  ranked.sort((left, right) => {
+    if (left.exact !== right.exact) return left.exact ? -1 : 1;
+    if (left.score !== right.score) return right.score - left.score;
+    return left.candidate.title.localeCompare(right.candidate.title, "zh-CN");
+  });
+  const seen = new Set<string>();
+  const result: ScrapeCandidate[] = [];
+  for (const item of ranked) {
+    const dedupeKey = `${normalizeScrapeKey(item.candidate.title)}|${
+      item.candidate.year ?? 0
+    }`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    result.push(item.candidate);
+    if (result.length >= 12) break;
+  }
+  return result;
+}
+
+export async function smartScrapeWeb(
+  query: string,
+  mediaType?: MediaType,
+): Promise<SmartScrapeResult> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    throw new Error("请输入要搜索的标题");
+  }
+  const settings = getWebSettings();
+  const hasTmdbKey = Boolean(settings.tmdbApiKey.trim());
+  if (mediaType === "movie" && !hasTmdbKey) {
+    throw new Error("电影目前只有 TMDB 数据源，请先在设置中填写 TMDB API Key");
+  }
+
+  const tasks: Array<Promise<ScrapeCandidate[]>> = [];
+  if (mediaType === "anime") {
+    tasks.push(fetchWebBangumi(trimmed, 2, "anime"));
+    tasks.push(fetchWebAniList(trimmed, "ANIME", "anime"));
+  } else if (mediaType === "novel") {
+    tasks.push(fetchWebBangumi(trimmed, 1, "novel"));
+    tasks.push(fetchWebAniList(trimmed, "MANGA", "novel"));
+    tasks.push(fetchWebOpenLibrary(trimmed));
+  } else if (mediaType === "movie") {
+    tasks.push(searchWebTmdb(trimmed, "movie"));
+  } else {
+    if (hasTmdbKey) {
+      tasks.push(searchWebTmdb(trimmed, mediaType));
+    }
+    tasks.push(fetchWebTvmaze(trimmed));
+    tasks.push(fetchWebBangumi(trimmed, 6, "tv"));
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const candidates: ScrapeCandidate[] = [];
+  const errors: string[] = [];
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      candidates.push(...outcome.value);
+    } else {
+      errors.push(
+        outcome.reason instanceof Error
+          ? outcome.reason.message
+          : String(outcome.reason),
+      );
+    }
+  }
+
+  if (candidates.length === 0 && errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
+
+  const ranked = rankScrapeCandidates(candidates, trimmed);
+  const key = normalizeScrapeKey(trimmed);
+  const confident =
+    ranked.length > 0 &&
+    Boolean(key) &&
+    [ranked[0].title, ranked[0].originalTitle].some(
+      (title) => normalizeScrapeKey(title ?? "") === key,
+    );
+  return { candidates: ranked, confident };
 }
 
 export function syncWebNow(): SyncReport {

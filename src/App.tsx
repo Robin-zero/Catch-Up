@@ -29,6 +29,7 @@ import {
   saveSettings,
   searchTmdb,
   setEntryStatus,
+  smartScrape,
   syncNow,
   updateEntry,
 } from "./api";
@@ -583,6 +584,11 @@ function EntryFormDialog({
   const [errors, setErrors] = useState<EntryFormErrors>({});
   const [saving, setSaving] = useState(false);
   const [scrapeOpen, setScrapeOpen] = useState(false);
+  const [scrapeCandidates, setScrapeCandidates] = useState<
+    ScrapeCandidate[] | null
+  >(null);
+  const [smartFilling, setSmartFilling] = useState(false);
+  const [scrapeNotice, setScrapeNotice] = useState<string | null>(null);
   const [importingCover, setImportingCover] = useState(false);
   const savingRef = useRef(false);
   const coverFileRef = useRef<HTMLInputElement>(null);
@@ -614,6 +620,7 @@ function EntryFormDialog({
 
   function applyScrapeCandidate(candidate: ScrapeCandidate) {
     const posterUrl = candidate.posterUrl ?? null;
+    const totalEpisodes = candidate.totalEpisodes ?? null;
     setValues((current) => ({
       ...current,
       title: current.title.trim() ? current.title : candidate.title,
@@ -621,6 +628,10 @@ function EntryFormDialog({
       rating:
         candidate.rating !== null ? String(candidate.rating) : current.rating,
       overview: candidate.overview ?? current.overview,
+      totalProgress:
+        totalEpisodes && !current.totalProgress.trim()
+          ? String(totalEpisodes)
+          : current.totalProgress,
     }));
     setErrors((current) => ({
       ...current,
@@ -648,6 +659,42 @@ function EntryFormDialog({
         .catch(() => {
           // 缓存失败时保留远程链接，不阻断用户操作。
         });
+    }
+  }
+
+  async function handleSmartScrape() {
+    if (smartFilling) {
+      return;
+    }
+    const title = values.title.trim();
+    if (!title) {
+      setErrors((current) => ({ ...current, title: "请先填写标题。" }));
+      titleRef.current?.focus();
+      return;
+    }
+
+    setSmartFilling(true);
+    setScrapeNotice(null);
+    try {
+      const result = await smartScrape(title, values.mediaType);
+      if (result.candidates.length === 0) {
+        setScrapeNotice("没有找到匹配的资料，可以试试手动刮削。");
+        return;
+      }
+      if (result.confident) {
+        const best = result.candidates[0];
+        applyScrapeCandidate(best);
+        setScrapeNotice(
+          `已根据 ${best.source ?? "网络结果"} 自动补全，可继续修改。`,
+        );
+        return;
+      }
+      setScrapeCandidates(result.candidates);
+      setScrapeOpen(true);
+    } catch (error) {
+      setScrapeNotice(getWriteErrorMessage(error, "智能补全失败，请重试。"));
+    } finally {
+      setSmartFilling(false);
     }
   }
 
@@ -831,14 +878,27 @@ function EntryFormDialog({
             <div className="form-field">
               <div className="entry-form__title-row">
                 <label htmlFor="entry-title">标题</label>
-                <button
-                  className="link-button entry-form__scrape-button"
-                  type="button"
-                  disabled={saving}
-                  onClick={() => setScrapeOpen(true)}
-                >
-                  从 TMDB 刮削
-                </button>
+                <span className="entry-form__scrape-actions">
+                  <button
+                    className="link-button entry-form__scrape-button"
+                    type="button"
+                    disabled={saving || smartFilling}
+                    onClick={handleSmartScrape}
+                  >
+                    {smartFilling ? "检索中…" : "智能补全"}
+                  </button>
+                  <button
+                    className="link-button entry-form__scrape-button"
+                    type="button"
+                    disabled={saving || smartFilling}
+                    onClick={() => {
+                      setScrapeCandidates(null);
+                      setScrapeOpen(true);
+                    }}
+                  >
+                    从 TMDB 刮削
+                  </button>
+                </span>
               </div>
               <input
                 id="entry-title"
@@ -855,6 +915,11 @@ function EntryFormDialog({
               {errors.title ? (
                 <p className="field-error" id="entry-title-error">
                   {errors.title}
+                </p>
+              ) : null}
+              {scrapeNotice ? (
+                <p className="field-hint" role="status">
+                  {scrapeNotice}
                 </p>
               ) : null}
             </div>
@@ -1170,11 +1235,15 @@ function EntryFormDialog({
       {scrapeOpen ? (
         <ScrapeDialog
           initialTitle={values.title}
+          initialCandidates={scrapeCandidates ?? undefined}
           mediaType={values.mediaType}
           settings={settings}
           active={!settingsOpen}
           fallbackFocusRef={fallbackFocusRef}
-          onClose={() => setScrapeOpen(false)}
+          onClose={() => {
+            setScrapeOpen(false);
+            setScrapeCandidates(null);
+          }}
           onOpenSettings={onOpenSettings}
           onSelect={applyScrapeCandidate}
         />
@@ -1909,7 +1978,24 @@ function ScrapeResultCard({
   onSelect: () => void;
 }) {
   const [posterFailed, setPosterFailed] = useState(false);
-  const fallbackType: MediaType = candidate.kind === "movie" ? "movie" : "drama";
+  const fallbackType: MediaType =
+    candidate.kind === "movie"
+      ? "movie"
+      : candidate.kind === "anime"
+        ? "anime"
+        : candidate.kind === "novel"
+          ? "novel"
+          : "drama";
+  const metaParts = [
+    candidate.originalTitle && candidate.originalTitle !== candidate.title
+      ? candidate.originalTitle
+      : null,
+    candidate.year ? `${candidate.year} 年` : null,
+    candidate.totalEpisodes
+      ? `共 ${candidate.totalEpisodes} ${candidate.kind === "novel" ? "章" : "集"}`
+      : null,
+    candidate.source ? `来源 ${candidate.source}` : null,
+  ].filter((part): part is string => Boolean(part));
 
   return (
     <article className="scrape-result" aria-label={candidate.title}>
@@ -1942,20 +2028,7 @@ function ScrapeResultCard({
           ) : null}
         </div>
         <p className="scrape-result__meta">
-          {candidate.originalTitle && candidate.originalTitle !== candidate.title
-            ? candidate.originalTitle
-            : null}
-          {candidate.originalTitle &&
-          candidate.originalTitle !== candidate.title &&
-          candidate.year
-            ? " · "
-            : null}
-          {candidate.year ? `${candidate.year} 年` : null}
-          {!candidate.originalTitle &&
-          !candidate.year &&
-          !candidate.overview
-            ? "暂无更多信息"
-            : null}
+          {metaParts.length > 0 ? metaParts.join(" · ") : "暂无更多信息"}
         </p>
         {candidate.overview ? (
           <p className="scrape-result__overview">{candidate.overview}</p>
@@ -1974,6 +2047,7 @@ function ScrapeResultCard({
 
 function ScrapeDialog({
   initialTitle,
+  initialCandidates,
   mediaType,
   settings,
   active,
@@ -1983,6 +2057,7 @@ function ScrapeDialog({
   onSelect,
 }: {
   initialTitle: string;
+  initialCandidates?: ScrapeCandidate[];
   mediaType: MediaType;
   settings: AppSettings;
   active: boolean;
@@ -1991,21 +2066,26 @@ function ScrapeDialog({
   onOpenSettings: () => void;
   onSelect: (candidate: ScrapeCandidate) => void;
 }) {
+  const smartMode = initialCandidates !== undefined;
   const [query, setQuery] = useState(initialTitle);
-  const [results, setResults] = useState<ScrapeCandidate[]>([]);
+  const [results, setResults] = useState<ScrapeCandidate[]>(
+    initialCandidates ?? [],
+  );
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [searched, setSearched] = useState(smartMode);
   const searchingRef = useRef(false);
   const queryRef = useRef<HTMLInputElement>(null);
   const titleId = "scrape-tmdb-title";
   const missingApiKey = !settings.tmdbApiKey.trim();
   const novelUnsupported = mediaType === "novel";
-  const visibleError = missingApiKey
-    ? "请先在设置中填写 TMDB API Key"
-    : novelUnsupported
-      ? "小说暂不支持 TMDB 刮削"
-      : error;
+  const visibleError = smartMode
+    ? error
+    : missingApiKey
+      ? "请先在设置中填写 TMDB API Key"
+      : novelUnsupported
+        ? "小说暂不支持 TMDB 刮削"
+        : error;
   const canSearch = !searching && !missingApiKey && !novelUnsupported;
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -2041,55 +2121,66 @@ function ScrapeDialog({
 
   return (
     <Dialog
-      title="从 TMDB 刮削"
+      title={smartMode ? "智能补全结果" : "从 TMDB 刮削"}
       titleId={titleId}
       active={active}
-      initialFocusRef={queryRef}
+      initialFocusRef={smartMode ? fallbackFocusRef : queryRef}
       fallbackFocusRef={fallbackFocusRef}
       onClose={onClose}
       className="dialog--scrape"
     >
       <form className="scrape-form" noValidate onSubmit={handleSearch}>
         <div className="dialog__body">
-          <div className="scrape-search-row">
-            <div className="form-field">
-              <label htmlFor="scrape-tmdb-query">搜索标题</label>
-              <input
-                id="scrape-tmdb-query"
-                type="search"
-                value={query}
-                placeholder="输入电影或剧集名称"
-                ref={queryRef}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setError(null);
-                }}
-              />
-            </div>
-            <button
-              className="primary-button scrape-search-row__submit"
-              type="submit"
-              disabled={!canSearch}
-            >
-              {searching ? "搜索中…" : "搜索"}
-            </button>
-          </div>
-          <p className="field-hint">
-            {mediaType === "movie"
-              ? "按电影搜索，结果来自 TMDB。"
-              : "按剧集搜索，结果来自 TMDB。平台需要手动填写。"}
-          </p>
+          {smartMode ? (
+            <p className="field-hint">
+              以下结果来自 Bangumi、AniList、TVMaze、Open Library 与
+              TMDB，选择最匹配的一项。
+            </p>
+          ) : (
+            <>
+              <div className="scrape-search-row">
+                <div className="form-field">
+                  <label htmlFor="scrape-tmdb-query">搜索标题</label>
+                  <input
+                    id="scrape-tmdb-query"
+                    type="search"
+                    value={query}
+                    placeholder="输入电影或剧集名称"
+                    ref={queryRef}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setError(null);
+                    }}
+                  />
+                </div>
+                <button
+                  className="primary-button scrape-search-row__submit"
+                  type="submit"
+                  disabled={!canSearch}
+                >
+                  {searching ? "搜索中…" : "搜索"}
+                </button>
+              </div>
+              <p className="field-hint">
+                {mediaType === "movie"
+                  ? "按电影搜索，结果来自 TMDB。"
+                  : "按剧集搜索，结果来自 TMDB。平台需要手动填写。"}
+              </p>
+            </>
+          )}
 
           {visibleError ? (
             <div className="scrape-error" role="alert">
               <p>{visibleError}</p>
-              <button
-                className="link-button"
-                type="button"
-                onClick={onOpenSettings}
-              >
-                打开设置
-              </button>
+              {!smartMode ? (
+                <button
+                  className="link-button"
+                  type="button"
+                  onClick={onOpenSettings}
+                >
+                  打开设置
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -2098,7 +2189,10 @@ function ScrapeDialog({
               正在搜索 TMDB…
             </p>
           ) : results.length > 0 ? (
-            <ul className="scrape-results" aria-label="TMDB 搜索结果">
+            <ul
+              className="scrape-results"
+              aria-label={smartMode ? "智能补全结果" : "TMDB 搜索结果"}
+            >
               {results.map((candidate) => (
                 <li key={`${candidate.kind}-${candidate.sourceId}`}>
                   <ScrapeResultCard

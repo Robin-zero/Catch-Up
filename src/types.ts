@@ -72,7 +72,14 @@ export interface ScrapeCandidate {
   posterUrl: string | null;
   rating: number | null;
   overview: string | null;
-  kind: "movie" | "tv";
+  kind: "movie" | "tv" | "anime" | "novel";
+  source?: string | null;
+  totalEpisodes?: number | null;
+}
+
+export interface SmartScrapeResult {
+  candidates: ScrapeCandidate[];
+  confident: boolean;
 }
 
 export interface EntryInput {

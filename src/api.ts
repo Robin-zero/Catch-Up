@@ -8,6 +8,7 @@ import type {
   MediaEntry,
   MediaType,
   ScrapeCandidate,
+  SmartScrapeResult,
   SyncReport,
 } from "./types";
 import {
@@ -26,6 +27,7 @@ import {
   saveWebCover,
   saveWebSettings,
   searchWebTmdb,
+  smartScrapeWeb,
   setWebEntryStatus,
   syncWebNow,
   updateWebEntry,
@@ -143,6 +145,17 @@ export function searchTmdb(
 ): Promise<ScrapeCandidate[]> {
   if (!isTauri()) return searchWebTmdb(query, mediaType);
   return invoke<ScrapeCandidate[]>("search_tmdb", {
+    query,
+    mediaType: mediaType ?? null,
+  });
+}
+
+export function smartScrape(
+  query: string,
+  mediaType?: MediaType,
+): Promise<SmartScrapeResult> {
+  if (!isTauri()) return smartScrapeWeb(query, mediaType);
+  return invoke<SmartScrapeResult>("smart_scrape", {
     query,
     mediaType: mediaType ?? null,
   });

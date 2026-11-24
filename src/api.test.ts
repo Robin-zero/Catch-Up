@@ -16,6 +16,7 @@ import {
   saveSettings,
   searchTmdb,
   setEntryStatus,
+  smartScrape,
   updateEntry,
 } from "./api";
 import {
@@ -220,6 +221,36 @@ describe("Tauri 数据访问", () => {
     mockedInvoke.mockClear();
     await searchTmdb("漫长的季节");
     expect(mockedInvoke).toHaveBeenCalledWith("search_tmdb", {
+      query: "漫长的季节",
+      mediaType: null,
+    });
+  });
+
+  it("通过 smart_scrape 传递查询与媒体类型", async () => {
+    const candidate: ScrapeCandidate = {
+      sourceId: 302267,
+      title: "葬送的芙莉莲",
+      originalTitle: "Sousou no Frieren",
+      year: 2023,
+      posterUrl: "https://lain.bgm.tv/pic/cover/l/frieren.jpg",
+      rating: 8.9,
+      overview: "简介",
+      kind: "anime",
+      source: "Bangumi",
+      totalEpisodes: 28,
+    };
+    const result = { candidates: [candidate], confident: true };
+    mockedInvoke.mockResolvedValue(result);
+
+    await expect(smartScrape("葬送的芙莉莲", "anime")).resolves.toEqual(result);
+    expect(mockedInvoke).toHaveBeenCalledWith("smart_scrape", {
+      query: "葬送的芙莉莲",
+      mediaType: "anime",
+    });
+
+    mockedInvoke.mockClear();
+    await smartScrape("漫长的季节");
+    expect(mockedInvoke).toHaveBeenCalledWith("smart_scrape", {
       query: "漫长的季节",
       mediaType: null,
     });

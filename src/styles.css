@@ -1869,6 +1869,12 @@ kbd {
   gap: 8px;
 }
 
+.entry-form__scrape-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .entry-form__scrape-button {
   flex: none;
   font-size: 11.5px;

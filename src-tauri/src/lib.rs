@@ -1,12 +1,14 @@
 pub mod cover;
 pub mod database;
 pub mod excel;
+pub mod scrape;
 pub mod settings;
 pub mod tmdb;
 pub mod webdav;
 
 use base64::Engine as _;
 use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
+use scrape::SmartScrapeResult;
 use settings::AppSettings;
 use tauri::{Manager, State};
 use tmdb::ScrapeCandidate;
@@ -114,6 +116,17 @@ async fn search_tmdb(
 }
 
 #[tauri::command]
+async fn smart_scrape(
+    database: State<'_, Database>,
+    query: String,
+    media_type: Option<MediaType>,
+) -> Result<SmartScrapeResult, String> {
+    // 先读取并释放数据库锁，再发起网络请求，避免 MutexGuard 跨 await。
+    let settings = database.get_settings()?;
+    scrape::smart_scrape(&settings, &query, media_type).await
+}
+
+#[tauri::command]
 async fn sync_now(database: State<'_, Database>) -> Result<SyncReport, String> {
     webdav::sync_now(database.inner()).await
 }
@@ -177,6 +190,7 @@ pub fn run() {
             get_settings,
             save_settings,
             search_tmdb,
+            smart_scrape,
             sync_now,
         ])
         .run(tauri::generate_context!())

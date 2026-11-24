@@ -118,6 +118,31 @@ async fn sync_now(database: State<'_, Database>) -> Result<SyncReport, String> {
     webdav::sync_now(database.inner()).await
 }
 
+#[cfg(desktop)]
+fn migrate_legacy_data_directory(data_directory: &std::path::Path) {
+    const LEGACY_IDENTIFIER: &str = "com.catchup.progress";
+    if data_directory.join("catchup.sqlite3").exists() {
+        return;
+    }
+    let Some(parent) = data_directory.parent() else {
+        return;
+    };
+    let legacy = parent.join(LEGACY_IDENTIFIER);
+    if !legacy.join("catchup.sqlite3").exists() {
+        return;
+    }
+    if std::fs::create_dir_all(data_directory).is_err() {
+        return;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("catchup.sqlite3{suffix}");
+        let source = legacy.join(&name);
+        if source.exists() {
+            let _ = std::fs::copy(&source, data_directory.join(&name));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -126,6 +151,8 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| std::io::Error::other(format!("无法定位应用数据目录：{error}")))?;
+            #[cfg(desktop)]
+            migrate_legacy_data_directory(&data_directory);
             let database = Database::open(data_directory.join("catchup.sqlite3"))
                 .map_err(std::io::Error::other)?;
             app.manage(database);

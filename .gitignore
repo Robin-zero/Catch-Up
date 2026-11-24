@@ -9,6 +9,7 @@ coverage/
 Thumbs.db
 
 src-tauri/target/
+android-build/
 src-tauri/gen/schemas/
 src-tauri/gen/android/.gradle/
 src-tauri/gen/android/.kotlin/

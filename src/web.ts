@@ -933,6 +933,10 @@ export async function importWebExcel(
   return result;
 }
 
+/**
+ * Web 端 xlsx 模板：结构与 src-tauri/src/excel.rs 中的生成逻辑保持一致。
+ * 修改列、样式或下拉选项时，请同步更新两端。
+ */
 const TEMPLATE_HEADERS = [
   "标题",
   "类型",
@@ -960,6 +964,55 @@ const TEMPLATE_SAMPLE: Array<string | number> = [
 ];
 
 const TEMPLATE_COLUMN_WIDTHS = [22, 10, 8, 10, 9, 8, 12, 7, 32, 32];
+
+const TEMPLATE_MEDIA_TYPES = ["剧集", "番剧", "综艺", "电影", "短剧"];
+const TEMPLATE_STATUSES = ["在追", "待看", "已完成", "已弃剧"];
+const TEMPLATE_PLATFORMS = [
+  "腾讯视频",
+  "爱奇艺",
+  "优酷",
+  "芒果TV",
+  "哔哩哔哩",
+  "红果短剧",
+  "Netflix",
+  "其他",
+];
+
+/** 与桌面端模板一致的单元格样式索引。 */
+const TEMPLATE_CELL_STYLES = {
+  header: 1,
+  text: 2,
+  integer: 3,
+  rating: 4,
+  link: 5,
+  overview: 6,
+} as const;
+
+const TEMPLATE_COLUMN_STYLES: Array<number | undefined> = [
+  undefined,
+  undefined,
+  undefined,
+  TEMPLATE_CELL_STYLES.integer,
+  TEMPLATE_CELL_STYLES.integer,
+  undefined,
+  undefined,
+  TEMPLATE_CELL_STYLES.rating,
+  TEMPLATE_CELL_STYLES.link,
+  undefined,
+];
+
+const TEMPLATE_ROW_STYLES = [
+  TEMPLATE_CELL_STYLES.text,
+  TEMPLATE_CELL_STYLES.text,
+  TEMPLATE_CELL_STYLES.text,
+  TEMPLATE_CELL_STYLES.integer,
+  TEMPLATE_CELL_STYLES.integer,
+  TEMPLATE_CELL_STYLES.text,
+  TEMPLATE_CELL_STYLES.text,
+  TEMPLATE_CELL_STYLES.rating,
+  TEMPLATE_CELL_STYLES.link,
+  TEMPLATE_CELL_STYLES.overview,
+];
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -1078,33 +1131,76 @@ function columnName(index: number): string {
   return name;
 }
 
-function templateCell(value: string | number, row: number, column: number): string {
+function templateCell(
+  value: string | number,
+  row: number,
+  column: number,
+  style: number,
+): string {
   const reference = `${columnName(column)}${row}`;
   if (typeof value === "number") {
-    return `<c r="${reference}"><v>${value}</v></c>`;
+    return `<c r="${reference}" s="${style}"><v>${value}</v></c>`;
   }
-  return `<c r="${reference}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
+  return `<c r="${reference}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
+}
+
+function templateValidation(
+  sqref: string,
+  values: string[],
+  title: string,
+  message: string,
+  errorTitle: string,
+  errorMessage: string,
+): string {
+  return `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="${sqref}" promptTitle="${escapeXml(title)}" prompt="${escapeXml(message)}" errorTitle="${escapeXml(errorTitle)}" error="${escapeXml(errorMessage)}"><formula1>"${escapeXml(values.join(","))}"</formula1></dataValidation>`;
 }
 
 function templateSheetXml(): string {
-  const rows = [TEMPLATE_HEADERS, TEMPLATE_SAMPLE]
-    .map((cells, rowIndex) => {
-      const rowNumber = rowIndex + 1;
-      const cellsXml = cells
-        .map((value, columnIndex) =>
-          templateCell(value, rowNumber, columnIndex),
-        )
-        .join("");
-      return `<row r="${rowNumber}">${cellsXml}</row>`;
-    })
-    .join("");
-  const columns = TEMPLATE_COLUMN_WIDTHS.map(
-    (width, index) =>
-      `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`,
+  const headerRow = TEMPLATE_HEADERS.map((header, columnIndex) =>
+    templateCell(
+      header,
+      1,
+      columnIndex,
+      TEMPLATE_CELL_STYLES.header,
+    ),
   ).join("");
+  const sampleRow = TEMPLATE_SAMPLE.map((value, columnIndex) =>
+    templateCell(value, 2, columnIndex, TEMPLATE_ROW_STYLES[columnIndex]),
+  ).join("");
+  const columns = TEMPLATE_COLUMN_WIDTHS.map((width, index) => {
+    const style = TEMPLATE_COLUMN_STYLES[index];
+    const styleAttribute = style === undefined ? "" : ` style="${style}"`;
+    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"${styleAttribute}/>`;
+  }).join("");
+  const validations = [
+    templateValidation(
+      "B2:B1001",
+      TEMPLATE_MEDIA_TYPES,
+      "选择类型",
+      "请从下拉列表中选择内容类型",
+      "类型无效",
+      "请从下拉列表中选择有效的类型",
+    ),
+    templateValidation(
+      "F2:F1001",
+      TEMPLATE_STATUSES,
+      "选择状态",
+      "请从下拉列表中选择追更状态",
+      "状态无效",
+      "请从下拉列表中选择有效的状态",
+    ),
+    templateValidation(
+      "G2:G1001",
+      TEMPLATE_PLATFORMS,
+      "选择平台",
+      "请从下拉列表中选择平台，选填",
+      "平台无效",
+      "请从下拉列表中选择有效的平台",
+    ),
+  ].join("");
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${columns}</cols><sheetData>${rows}</sheetData></worksheet>`;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:J2"/><sheetViews><sheetView workbookViewId="0"><pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${columns}</cols><sheetData><row r="1" ht="24" customHeight="1">${headerRow}</row><row r="2">${sampleRow}</row></sheetData><autoFilter ref="A1:J2"/><dataValidations count="3">${validations}</dataValidations></worksheet>`;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -1142,7 +1238,7 @@ export function generateWebTemplate(): string {
     {
       name: "xl/styles.xml",
       content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E79"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="3"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF1F4E79"/></left><right style="thin"><color rgb="FF1F4E79"/></right><top style="thin"><color rgb="FF1F4E79"/></top><bottom style="thin"><color rgb="FF1F4E79"/></bottom><diagonal/></border><border><left style="thin"><color rgb="FFD9D9D9"/></left><right style="thin"><color rgb="FFD9D9D9"/></right><top style="thin"><color rgb="FFD9D9D9"/></top><bottom style="thin"><color rgb="FFD9D9D9"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="1" fontId="0" fillId="0" borderId="2" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="2" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="49" fontId="0" fillId="0" borderId="2" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>`,
     },
     { name: "xl/worksheets/sheet1.xml", content: templateSheetXml() },
   ].map((file) => ({ name: file.name, data: encoder.encode(file.content) }));

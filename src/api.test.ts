@@ -106,13 +106,21 @@ describe("Tauri 数据访问", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("download_excel_template");
   });
 
-  it("Web 端模板生成 xlsx 压缩包", () => {
+  it("Web 端模板生成与桌面端一致的 xlsx", () => {
     const base64 = generateWebTemplate();
     expect(base64.startsWith("UEsDB")).toBe(true);
 
     const binary = atob(base64);
-    expect(binary).toContain("xl/workbook.xml");
-    expect(binary).toContain("xl/worksheets/sheet1.xml");
+    const content = new TextDecoder().decode(
+      Uint8Array.from(binary, (char) => char.charCodeAt(0)),
+    );
+    expect(content).toContain("xl/workbook.xml");
+    expect(content).toContain("xl/worksheets/sheet1.xml");
+    expect(content).toContain("FF1F4E79");
+    expect(content).toContain("dataValidations");
+    expect(content).toContain("选择类型");
+    expect(content).toContain('state="frozen"');
+    expect(content).toContain('ref="A1:J2"');
   });
 
   it("通过 update_entry 传递条目 id 和完整输入", async () => {

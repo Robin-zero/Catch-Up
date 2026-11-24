@@ -798,42 +798,6 @@ async function requestAiCandidate(
   return mapAiContent(content, mediaType);
 }
 
-function enrichScrapeCandidate(
-  top: ScrapeCandidate,
-  ai: ScrapeCandidate,
-): ScrapeCandidate {
-  let used = false;
-  const next: ScrapeCandidate = { ...top };
-  if (!next.platform && ai.platform) {
-    next.platform = ai.platform;
-    used = true;
-  }
-  if (!next.overview && ai.overview) {
-    next.overview = ai.overview;
-    used = true;
-  }
-  if (!next.posterUrl && ai.posterUrl) {
-    next.posterUrl = ai.posterUrl;
-    used = true;
-  }
-  if (next.rating === null && ai.rating !== null) {
-    next.rating = ai.rating;
-    used = true;
-  }
-  if (!next.year && ai.year) {
-    next.year = ai.year;
-    used = true;
-  }
-  if (!next.originalTitle && ai.originalTitle) {
-    next.originalTitle = ai.originalTitle;
-    used = true;
-  }
-  if (used) {
-    next.source = top.source ? `${top.source} + AI` : "AI";
-  }
-  return next;
-}
-
 function isConfidentScrape(candidates: ScrapeCandidate[], key: string): boolean {
   return (
     candidates.length > 0 &&
@@ -895,30 +859,32 @@ export async function smartScrapeWeb(
     throw new Error(errors.join("\n"));
   }
 
-  let ranked = rankScrapeCandidates(candidates, trimmed);
+  const ranked = rankScrapeCandidates(candidates, trimmed);
   const key = normalizeScrapeKey(trimmed);
-  let confident = isConfidentScrape(ranked, key);
+  return { candidates: ranked, confident: isConfidentScrape(ranked, key) };
+}
 
-  if (settings.aiEnabled) {
-    try {
-      const aiCandidate = await requestAiCandidate(settings, trimmed, mediaType);
-      if (aiCandidate) {
-        if (confident && ranked.length > 0) {
-          ranked = [enrichScrapeCandidate(ranked[0], aiCandidate), ...ranked.slice(1)];
-        } else {
-          ranked = rankScrapeCandidates([...ranked, aiCandidate], trimmed);
-          confident = isConfidentScrape(ranked, key);
-        }
-      }
-    } catch (error) {
-      if (ranked.length === 0) {
-        throw error;
-      }
-      // AI 兜底失败时保留免费多源的结果。
-    }
+export async function aiScrapeWeb(
+  query: string,
+  mediaType?: MediaType,
+): Promise<SmartScrapeResult> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    throw new Error("请输入要搜索的标题");
+  }
+  const settings = getWebSettings();
+  if (!settings.aiEnabled) {
+    throw new Error("请先在设置中开启 AI 补全");
   }
 
-  return { candidates: ranked, confident };
+  const candidate = await requestAiCandidate(settings, trimmed, mediaType);
+  if (!candidate) {
+    return { candidates: [], confident: false };
+  }
+  return {
+    candidates: [candidate],
+    confident: isConfidentScrape([candidate], normalizeScrapeKey(trimmed)),
+  };
 }
 
 export function syncWebNow(): SyncReport {

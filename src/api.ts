@@ -25,6 +25,7 @@ import {
   purgeWebEntry,
   restoreWebEntry,
   saveWebCover,
+  aiScrapeWeb,
   saveWebSettings,
   searchWebTmdb,
   smartScrapeWeb,
@@ -156,6 +157,17 @@ export function smartScrape(
 ): Promise<SmartScrapeResult> {
   if (!isTauri()) return smartScrapeWeb(query, mediaType);
   return invoke<SmartScrapeResult>("smart_scrape", {
+    query,
+    mediaType: mediaType ?? null,
+  });
+}
+
+export function aiScrape(
+  query: string,
+  mediaType?: MediaType,
+): Promise<SmartScrapeResult> {
+  if (!isTauri()) return aiScrapeWeb(query, mediaType);
+  return invoke<SmartScrapeResult>("ai_scrape", {
     query,
     mediaType: mediaType ?? null,
   });

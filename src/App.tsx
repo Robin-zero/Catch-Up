@@ -12,6 +12,7 @@ import {
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   adjustProgress,
+  aiScrape,
   cacheCoverFromUrl,
   createEntry,
   deleteEntry,
@@ -587,7 +588,11 @@ function EntryFormDialog({
   const [scrapeCandidates, setScrapeCandidates] = useState<
     ScrapeCandidate[] | null
   >(null);
+  const [scrapeResultMode, setScrapeResultMode] = useState<"smart" | "ai">(
+    "smart",
+  );
   const [smartFilling, setSmartFilling] = useState(false);
+  const [aiFilling, setAiFilling] = useState(false);
   const [scrapeNotice, setScrapeNotice] = useState<string | null>(null);
   const [importingCover, setImportingCover] = useState(false);
   const savingRef = useRef(false);
@@ -697,12 +702,47 @@ function EntryFormDialog({
         );
         return;
       }
+      setScrapeResultMode("smart");
       setScrapeCandidates(result.candidates);
       setScrapeOpen(true);
     } catch (error) {
       setScrapeNotice(getWriteErrorMessage(error, "智能补全失败，请重试。"));
     } finally {
       setSmartFilling(false);
+    }
+  }
+
+  async function handleAiScrape() {
+    if (aiFilling) {
+      return;
+    }
+    const title = values.title.trim();
+    if (!title) {
+      setErrors((current) => ({ ...current, title: "请先填写标题。" }));
+      titleRef.current?.focus();
+      return;
+    }
+
+    setAiFilling(true);
+    setScrapeNotice(null);
+    try {
+      const result = await aiScrape(title, values.mediaType);
+      if (result.candidates.length === 0) {
+        setScrapeNotice("AI 没有返回可用的资料，可以换个标题再试。");
+        return;
+      }
+      if (result.confident) {
+        applyScrapeCandidate(result.candidates[0]);
+        setScrapeNotice("已由 AI 补全，可继续修改。");
+        return;
+      }
+      setScrapeResultMode("ai");
+      setScrapeCandidates(result.candidates);
+      setScrapeOpen(true);
+    } catch (error) {
+      setScrapeNotice(getWriteErrorMessage(error, "AI 补全失败，请重试。"));
+    } finally {
+      setAiFilling(false);
     }
   }
 
@@ -906,15 +946,25 @@ function EntryFormDialog({
                   <button
                     className="link-button entry-form__scrape-button"
                     type="button"
-                    disabled={saving || smartFilling}
+                    disabled={saving || smartFilling || aiFilling}
                     onClick={handleSmartScrape}
                   >
                     {smartFilling ? "检索中…" : "智能补全"}
                   </button>
+                  {settings.aiEnabled ? (
+                    <button
+                      className="link-button entry-form__scrape-button"
+                      type="button"
+                      disabled={saving || smartFilling || aiFilling}
+                      onClick={handleAiScrape}
+                    >
+                      {aiFilling ? "AI 检索中…" : "AI 补全"}
+                    </button>
+                  ) : null}
                   <button
                     className="link-button entry-form__scrape-button"
                     type="button"
-                    disabled={saving || smartFilling}
+                    disabled={saving || smartFilling || aiFilling}
                     onClick={() => {
                       setScrapeCandidates(null);
                       setScrapeOpen(true);
@@ -1260,6 +1310,7 @@ function EntryFormDialog({
         <ScrapeDialog
           initialTitle={values.title}
           initialCandidates={scrapeCandidates ?? undefined}
+          resultMode={scrapeResultMode}
           mediaType={values.mediaType}
           settings={settings}
           active={!settingsOpen}
@@ -2203,6 +2254,7 @@ function ScrapeResultCard({
 function ScrapeDialog({
   initialTitle,
   initialCandidates,
+  resultMode = "smart",
   mediaType,
   settings,
   active,
@@ -2213,6 +2265,7 @@ function ScrapeDialog({
 }: {
   initialTitle: string;
   initialCandidates?: ScrapeCandidate[];
+  resultMode?: "smart" | "ai";
   mediaType: MediaType;
   settings: AppSettings;
   active: boolean;
@@ -2222,6 +2275,7 @@ function ScrapeDialog({
   onSelect: (candidate: ScrapeCandidate) => void;
 }) {
   const smartMode = initialCandidates !== undefined;
+  const aiMode = smartMode && resultMode === "ai";
   const [query, setQuery] = useState(initialTitle);
   const [results, setResults] = useState<ScrapeCandidate[]>(
     initialCandidates ?? [],
@@ -2276,7 +2330,13 @@ function ScrapeDialog({
 
   return (
     <Dialog
-      title={smartMode ? "智能补全结果" : "从 TMDB 刮削"}
+      title={
+        smartMode
+          ? aiMode
+            ? "AI 补全结果"
+            : "智能补全结果"
+          : "从 TMDB 刮削"
+      }
       titleId={titleId}
       active={active}
       initialFocusRef={smartMode ? fallbackFocusRef : queryRef}
@@ -2288,8 +2348,9 @@ function ScrapeDialog({
         <div className="dialog__body">
           {smartMode ? (
             <p className="field-hint">
-              以下结果来自 Bangumi、AniList、TVMaze、Open Library 与
-              TMDB，选择最匹配的一项。
+              {aiMode
+                ? "以下结果由 AI 根据标题推断，请核对后再使用。"
+                : "以下结果来自 Bangumi、AniList、TVMaze、Open Library 与 TMDB，选择最匹配的一项。"}
             </p>
           ) : (
             <>
@@ -2346,7 +2407,13 @@ function ScrapeDialog({
           ) : results.length > 0 ? (
             <ul
               className="scrape-results"
-              aria-label={smartMode ? "智能补全结果" : "TMDB 搜索结果"}
+              aria-label={
+                aiMode
+                  ? "AI 补全结果"
+                  : smartMode
+                    ? "智能补全结果"
+                    : "TMDB 搜索结果"
+              }
             >
               {results.map((candidate) => (
                 <li key={`${candidate.kind}-${candidate.sourceId}`}>

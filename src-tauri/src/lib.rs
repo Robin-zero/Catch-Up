@@ -128,6 +128,16 @@ async fn smart_scrape(
 }
 
 #[tauri::command]
+async fn ai_scrape(
+    database: State<'_, Database>,
+    query: String,
+    media_type: Option<MediaType>,
+) -> Result<SmartScrapeResult, String> {
+    let settings = database.get_settings()?;
+    scrape::ai_scrape(&settings, &query, media_type).await
+}
+
+#[tauri::command]
 async fn sync_now(
     app: tauri::AppHandle,
     database: State<'_, Database>,
@@ -199,6 +209,7 @@ pub fn run() {
             save_settings,
             search_tmdb,
             smart_scrape,
+            ai_scrape,
             sync_now,
         ])
         .run(tauri::generate_context!())

@@ -17,6 +17,7 @@ import {
   searchTmdb,
   setEntryStatus,
   smartScrape,
+  aiScrape,
   updateEntry,
 } from "./api";
 import {
@@ -253,6 +254,17 @@ describe("Tauri 数据访问", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("smart_scrape", {
       query: "漫长的季节",
       mediaType: null,
+    });
+  });
+
+  it("通过 ai_scrape 触发独立 AI 补全", async () => {
+    const result = { candidates: [], confident: false };
+    mockedInvoke.mockResolvedValue(result);
+
+    await expect(aiScrape("沙丘", "movie")).resolves.toEqual(result);
+    expect(mockedInvoke).toHaveBeenCalledWith("ai_scrape", {
+      query: "沙丘",
+      mediaType: "movie",
     });
   });
 });

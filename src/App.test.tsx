@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setSystemPrefersDark } from "./test/setup";
 import {
   adjustProgress,
+  aiScrape,
   cacheCoverFromUrl,
   createEntry,
   deleteEntry,
@@ -60,6 +61,7 @@ vi.mock("./api", () => ({
   cacheCoverFromUrl: vi.fn((url: string) => Promise.resolve(url)),
   searchTmdb: vi.fn(),
   smartScrape: vi.fn(),
+  aiScrape: vi.fn(),
   syncNow: vi.fn(),
   getLibraryErrorMessage: vi.fn(
     () => "本地内容库暂时无法读取，请检查应用状态后重试。",
@@ -84,6 +86,7 @@ const mockedSaveSettings = vi.mocked(saveSettings);
 const mockedSaveCoverImage = vi.mocked(saveCoverImage);
 const mockedSearchTmdb = vi.mocked(searchTmdb);
 const mockedCacheCoverFromUrl = vi.mocked(cacheCoverFromUrl);
+const mockedAiScrape = vi.mocked(aiScrape);
 const mockedSmartScrape = vi.mocked(smartScrape);
 const mockedSyncNow = vi.mocked(syncNow);
 
@@ -141,6 +144,7 @@ beforeEach(() => {
   mockedCacheCoverFromUrl.mockImplementation(async (url: string) => url);
   mockedSearchTmdb.mockReset();
   mockedSmartScrape.mockReset();
+  mockedAiScrape.mockReset();
   mockedSyncNow.mockReset();
   mockedSyncNow.mockResolvedValue(makeSyncReport());
 });
@@ -2739,6 +2743,81 @@ describe("TMDB 元数据刮削", () => {
 
     expect(within(form).getByText("请先填写标题。")).toBeInTheDocument();
     expect(mockedSmartScrape).not.toHaveBeenCalled();
+  });
+
+  it("未开启 AI 补全时不展示 AI 按钮", async () => {
+    const user = userEvent.setup();
+    await renderApp({ aiEnabled: false });
+    const form = await openCreateForm(user);
+
+    expect(
+      within(form).queryByRole("button", { name: "AI 补全" }),
+    ).toBeNull();
+    expect(
+      within(form).getByRole("button", { name: "智能补全" }),
+    ).toBeInTheDocument();
+  });
+
+  it("开启 AI 补全后可独立触发并回填平台等资料", async () => {
+    const user = userEvent.setup();
+    await renderApp({
+      aiEnabled: true,
+      aiApiKey: "key",
+      aiModel: "gpt-4o-mini",
+    });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "葬送的芙莉莲");
+    mockedAiScrape.mockResolvedValue({
+      candidates: [
+        {
+          ...candidate,
+          sourceId: 1,
+          title: "葬送的芙莉莲",
+          originalTitle: "Sousou no Frieren",
+          year: 2023,
+          rating: 9.2,
+          overview: "AI 提供的简介",
+          kind: "anime",
+          source: "AI",
+          platform: "哔哩哔哩",
+        },
+      ],
+      confident: true,
+    });
+
+    await user.click(within(form).getByRole("button", { name: "AI 补全" }));
+
+    expect(
+      await within(form).findByText("已由 AI 补全，可继续修改。"),
+    ).toBeInTheDocument();
+    expect(within(form).getByLabelText("平台")).toHaveValue("哔哩哔哩");
+    expect(within(form).getByLabelText("评分")).toHaveValue(9.2);
+    expect(within(form).getByLabelText("简介")).toHaveValue("AI 提供的简介");
+    expect(mockedAiScrape).toHaveBeenCalledWith("葬送的芙莉莲", "drama");
+    expect(mockedSmartScrape).not.toHaveBeenCalled();
+  });
+
+  it("AI 结果不确定时打开 AI 候选对话框", async () => {
+    const user = userEvent.setup();
+    await renderApp({ aiEnabled: true, aiModel: "gpt-4o-mini" });
+    const form = await openCreateForm(user);
+    await user.type(within(form).getByLabelText("标题"), "沙丘");
+    mockedAiScrape.mockResolvedValue({
+      candidates: [{ ...candidate, source: "AI", platform: "Netflix" }],
+      confident: false,
+    });
+
+    await user.click(within(form).getByRole("button", { name: "AI 补全" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "AI 补全结果",
+    });
+    expect(
+      within(dialog).getByText("以下结果由 AI 根据标题推断，请核对后再使用。"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/平台 Netflix/),
+    ).toBeInTheDocument();
   });
 });
 

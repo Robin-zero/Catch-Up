@@ -659,6 +659,7 @@ mod tests {
             last_synced_at: None,
             theme: "system".to_owned(),
             library_view: "list".to_owned(),
+            ..AppSettings::default()
         }
     }
 

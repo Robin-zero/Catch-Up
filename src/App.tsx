@@ -632,6 +632,7 @@ function EntryFormDialog({
       rating:
         candidate.rating !== null ? String(candidate.rating) : current.rating,
       overview: candidate.overview ?? current.overview,
+      platform: candidate.platform ?? current.platform,
       totalProgress:
         totalEpisodes && !current.totalProgress.trim()
           ? String(totalEpisodes)
@@ -643,6 +644,7 @@ function EntryFormDialog({
       coverUrl: undefined,
       rating: undefined,
       overview: undefined,
+      platform: undefined,
       form: undefined,
     }));
     setScrapeOpen(false);
@@ -1673,15 +1675,21 @@ function SettingsDialog({
   const [values, setValues] = useState<AppSettings>(() => ({ ...settings }));
   const [errors, setErrors] = useState<
     Partial<
-      Record<"tmdbApiKey" | "webdavUrl" | "webdavUsername" | "form", string>
+      Record<
+        "tmdbApiKey" | "webdavUrl" | "webdavUsername" | "aiBaseUrl" | "aiModel" | "form",
+        string
+      >
     >
   >({});
   const [saving, setSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showAiKey, setShowAiKey] = useState(false);
   const savingRef = useRef(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
   const webdavUrlRef = useRef<HTMLInputElement>(null);
   const webdavUsernameRef = useRef<HTMLInputElement>(null);
+  const aiBaseUrlRef = useRef<HTMLInputElement>(null);
+  const aiModelRef = useRef<HTMLInputElement>(null);
   const titleId = "settings-title";
   const syncing = syncState.phase === "syncing";
   const lastSyncedLabel = settings.lastSyncedAt
@@ -1721,12 +1729,27 @@ function SettingsDialog({
     if (values.webdavEnabled && !values.webdavUsername.trim()) {
       nextErrors.webdavUsername = "启用自动同步时请填写用户名。";
     }
+    const aiBaseUrl = values.aiBaseUrl.trim();
+    const aiModel = values.aiModel.trim();
+    if (aiBaseUrl && !/^https?:\/\//i.test(aiBaseUrl)) {
+      nextErrors.aiBaseUrl = "接口地址必须以 http:// 或 https:// 开头。";
+    }
+    if (values.aiEnabled && !aiBaseUrl) {
+      nextErrors.aiBaseUrl = "启用 AI 补全时请填写接口地址。";
+    }
+    if (values.aiEnabled && !aiModel) {
+      nextErrors.aiModel = "启用 AI 补全时请填写模型名称。";
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       if (nextErrors.webdavUrl) {
         webdavUrlRef.current?.focus();
       } else if (nextErrors.webdavUsername) {
         webdavUsernameRef.current?.focus();
+      } else if (nextErrors.aiBaseUrl) {
+        aiBaseUrlRef.current?.focus();
+      } else if (nextErrors.aiModel) {
+        aiModelRef.current?.focus();
       }
       return;
     }
@@ -1840,6 +1863,115 @@ function SettingsDialog({
                 </p>
                 {errors.tmdbApiKey ? (
                   <p className="field-error">{errors.tmdbApiKey}</p>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-section" aria-labelledby="settings-ai-heading">
+            <div className="settings-section__heading">
+              <h3 id="settings-ai-heading">AI 补全</h3>
+              <p>
+                作为智能补全的兜底：多源结果不确定或字段缺失时，调用兼容
+                OpenAI 的接口补齐标题、简介、评分、平台与封面。
+              </p>
+            </div>
+            <div className="settings-section__fields">
+              <div className="form-field">
+                <label htmlFor="settings-ai-toggle-group">启用状态</label>
+                <div
+                  id="settings-ai-toggle-group"
+                  className="layout-toggle"
+                  role="group"
+                  aria-label="启用 AI 补全"
+                >
+                  <button
+                    className="layout-toggle__option"
+                    type="button"
+                    aria-pressed={values.aiEnabled}
+                    onClick={() => changeValue("aiEnabled", true)}
+                  >
+                    启用
+                  </button>
+                  <button
+                    className="layout-toggle__option"
+                    type="button"
+                    aria-pressed={!values.aiEnabled}
+                    onClick={() => changeValue("aiEnabled", false)}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="settings-ai-base-url">接口地址</label>
+                <input
+                  id="settings-ai-base-url"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={500}
+                  placeholder="https://api.openai.com/v1"
+                  value={values.aiBaseUrl}
+                  aria-invalid={errors.aiBaseUrl ? true : undefined}
+                  ref={aiBaseUrlRef}
+                  onChange={(event) =>
+                    changeValue("aiBaseUrl", event.target.value)
+                  }
+                />
+                <p className="field-hint">
+                  兼容 OpenAI Chat Completions，可填写 DeepSeek、Kimi、Ollama
+                  等服务的地址。
+                </p>
+                {errors.aiBaseUrl ? (
+                  <p className="field-error">{errors.aiBaseUrl}</p>
+                ) : null}
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="settings-ai-api-key">API Key</label>
+                <div className="password-field">
+                  <input
+                    id="settings-ai-api-key"
+                    type={showAiKey ? "text" : "password"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={500}
+                    value={values.aiApiKey}
+                    onChange={(event) =>
+                      changeValue("aiApiKey", event.target.value)
+                    }
+                  />
+                  <button
+                    className="secondary-button password-field__toggle"
+                    type="button"
+                    aria-label={showAiKey ? "隐藏 AI API Key" : "显示 AI API Key"}
+                    onClick={() => setShowAiKey((current) => !current)}
+                  >
+                    {showAiKey ? "隐藏" : "显示"}
+                  </button>
+                </div>
+                <p className="field-hint">本地模型服务不需要 Key 时可留空。</p>
+              </div>
+
+              <div className="form-field">
+                <label htmlFor="settings-ai-model">模型</label>
+                <input
+                  id="settings-ai-model"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={200}
+                  placeholder="gpt-4o-mini"
+                  value={values.aiModel}
+                  aria-invalid={errors.aiModel ? true : undefined}
+                  ref={aiModelRef}
+                  onChange={(event) => changeValue("aiModel", event.target.value)}
+                />
+                {errors.aiModel ? (
+                  <p className="field-error">{errors.aiModel}</p>
                 ) : null}
               </div>
             </div>
@@ -2017,6 +2149,7 @@ function ScrapeResultCard({
       ? `共 ${candidate.totalEpisodes} ${candidate.kind === "novel" ? "章" : "集"}`
       : null,
     candidate.source ? `来源 ${candidate.source}` : null,
+    candidate.platform ? `平台 ${candidate.platform}` : null,
   ].filter((part): part is string => Boolean(part));
 
   return (

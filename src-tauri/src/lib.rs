@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod cover;
 pub mod database;
 pub mod excel;

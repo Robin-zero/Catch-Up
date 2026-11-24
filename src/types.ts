@@ -51,6 +51,10 @@ export interface AppSettings {
   lastSyncedAt: string | null;
   theme: ThemeMode;
   libraryView: LibraryView;
+  aiEnabled: boolean;
+  aiBaseUrl: string;
+  aiApiKey: string;
+  aiModel: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -62,6 +66,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastSyncedAt: null,
   theme: "system",
   libraryView: "list",
+  aiEnabled: false,
+  aiBaseUrl: "https://api.openai.com/v1",
+  aiApiKey: "",
+  aiModel: "gpt-4o-mini",
 };
 
 export interface ScrapeCandidate {
@@ -75,6 +83,7 @@ export interface ScrapeCandidate {
   kind: "movie" | "tv" | "anime" | "novel";
   source?: string | null;
   totalEpisodes?: number | null;
+  platform?: string | null;
 }
 
 export interface SmartScrapeResult {

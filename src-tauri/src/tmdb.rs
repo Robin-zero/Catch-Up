@@ -21,6 +21,7 @@ pub struct ScrapeCandidate {
     pub kind: String,
     pub source: Option<String>,
     pub total_episodes: Option<u32>,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +152,7 @@ fn candidate_from_result(result: TmdbSearchResult, kind: &str) -> Option<ScrapeC
         kind: kind.to_owned(),
         source: Some("TMDB".to_owned()),
         total_episodes: None,
+        platform: None,
     })
 }
 

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ai;
 use crate::database::MediaType;
 use crate::settings::AppSettings;
 use crate::tmdb::{search_tmdb, ScrapeCandidate};
@@ -117,19 +118,83 @@ pub async fn smart_scrape(
     if attempted == 0 {
         return Err("当前内容类型没有可用的数据源。".to_owned());
     }
+
+    let key = normalize_key(query);
+    let mut candidates = rank(candidates, &key);
+    let mut confident = candidates
+        .first()
+        .is_some_and(|candidate| matches_exactly(candidate, &key));
+
+    // AI 作为兜底：免费多源没有高置信结果时补充候选，已命中时只补齐缺失字段。
+    if settings.ai_enabled {
+        match ai::complete(settings, query, media_type).await {
+            Ok(Some(ai_candidate)) => {
+                if confident {
+                    if let Some(top) = candidates.first_mut() {
+                        enrich_with_ai(top, ai_candidate);
+                    }
+                } else {
+                    candidates.push(ai_candidate);
+                    candidates = rank(candidates, &key);
+                    confident = candidates
+                        .first()
+                        .is_some_and(|candidate| matches_exactly(candidate, &key));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if candidates.is_empty() {
+                    errors.push(error);
+                }
+            }
+        }
+    }
+
     if candidates.is_empty() && !errors.is_empty() {
         return Err(errors.join("\n"));
     }
 
-    let key = normalize_key(query);
-    let candidates = rank(candidates, &key);
-    let confident = candidates
-        .first()
-        .is_some_and(|candidate| matches_exactly(candidate, &key));
     Ok(SmartScrapeResult {
         candidates,
         confident,
     })
+}
+
+/// 只补齐免费数据源缺失的字段，不覆盖已有值。
+fn enrich_with_ai(top: &mut ScrapeCandidate, ai: ScrapeCandidate) {
+    let mut used = false;
+
+    if top.platform.is_none() && ai.platform.is_some() {
+        top.platform = ai.platform;
+        used = true;
+    }
+    if top.overview.is_none() && ai.overview.is_some() {
+        top.overview = ai.overview;
+        used = true;
+    }
+    if top.poster_url.is_none() && ai.poster_url.is_some() {
+        top.poster_url = ai.poster_url;
+        used = true;
+    }
+    if top.rating.is_none() && ai.rating.is_some() {
+        top.rating = ai.rating;
+        used = true;
+    }
+    if top.year.is_none() && ai.year.is_some() {
+        top.year = ai.year;
+        used = true;
+    }
+    if top.original_title.is_none() && ai.original_title.is_some() {
+        top.original_title = ai.original_title;
+        used = true;
+    }
+
+    if used {
+        top.source = Some(match top.source.take() {
+            Some(source) => format!("{source} + AI"),
+            None => "AI".to_owned(),
+        });
+    }
 }
 
 async fn fetch(
@@ -245,6 +310,7 @@ fn map_bangumi_response(body: &str, kind: &str) -> Result<Vec<ScrapeCandidate>, 
                     .eps
                     .or(subject.volumes)
                     .filter(|count| *count > 0),
+                platform: None,
             })
         })
         .collect())
@@ -371,6 +437,7 @@ fn map_anilist_response(body: &str, kind: &str) -> Result<Vec<ScrapeCandidate>, 
                 kind: kind.to_owned(),
                 source: Some("AniList".to_owned()),
                 total_episodes: item.episodes.or(item.chapters).filter(|count| *count > 0),
+                platform: None,
             })
         })
         .collect())
@@ -458,6 +525,7 @@ fn map_tvmaze_response(body: &str) -> Result<Vec<ScrapeCandidate>, String> {
                 kind: "tv".to_owned(),
                 source: Some("TVMaze".to_owned()),
                 total_episodes: None,
+                platform: None,
             })
         })
         .collect())
@@ -551,6 +619,7 @@ fn map_open_library_response(body: &str) -> Result<Vec<ScrapeCandidate>, String>
                 kind: "novel".to_owned(),
                 source: Some("Open Library".to_owned()),
                 total_episodes: None,
+                platform: None,
             })
         })
         .collect())
@@ -644,6 +713,7 @@ fn source_priority(source: Option<&str>) -> i32 {
         Some("AniList") => 4,
         Some("TVMaze") => 3,
         Some("Open Library") => 2,
+        Some("AI") => 1,
         _ => 0,
     }
 }
@@ -963,6 +1033,7 @@ mod tests {
             kind: "anime".to_owned(),
             source: Some(source.to_owned()),
             total_episodes: Some(12),
+            platform: None,
         }
     }
 
@@ -987,5 +1058,23 @@ mod tests {
 
         let fuzzy = vec![candidate("葬送的芙莉莲 第二季", Some(2024), "Bangumi")];
         assert!(!matches_exactly(&fuzzy[0], &normalize_key("葬送的芙莉莲")));
+    }
+
+    #[test]
+    fn ai_enrichment_only_fills_missing_fields() {
+        let mut top = candidate("葬送的芙莉莲", Some(2023), "Bangumi");
+        top.overview = None;
+        top.platform = None;
+        let mut ai_candidate = candidate("葬送的芙莉莲", Some(2023), "AI");
+        ai_candidate.overview = Some("AI 提供的简介".to_owned());
+        ai_candidate.platform = Some("哔哩哔哩".to_owned());
+        ai_candidate.rating = Some(9.9);
+
+        enrich_with_ai(&mut top, ai_candidate);
+
+        assert_eq!(top.overview.as_deref(), Some("AI 提供的简介"));
+        assert_eq!(top.platform.as_deref(), Some("哔哩哔哩"));
+        assert_eq!(top.rating, Some(8.5));
+        assert_eq!(top.source.as_deref(), Some("Bangumi + AI"));
     }
 }

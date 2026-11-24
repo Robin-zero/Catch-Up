@@ -2135,6 +2135,7 @@ describe("设置中心", () => {
 
   it("从侧边栏打开设置并回填已保存的设置", async () => {
     mockedGetSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
       tmdbApiKey: "tmdb-abc",
       webdavUrl: "https://dav.example.com/catchup",
       webdavUsername: "alice",
@@ -2195,6 +2196,45 @@ describe("设置中心", () => {
       tmdbApiKey: "new-key",
     });
     expect(screen.getByRole("status")).toHaveTextContent("设置已保存");
+  });
+
+  it("启用 AI 补全时校验地址与模型并保存配置", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const dialog = await openSettings(user);
+    mockedSaveSettings.mockImplementation(async (settings) => settings);
+
+    await user.click(within(dialog).getByRole("button", { name: "启用" }));
+    const baseUrl = within(dialog).getByLabelText("接口地址");
+    await user.clear(baseUrl);
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    expect(
+      within(dialog).getByText("启用 AI 补全时请填写接口地址。"),
+    ).toBeInTheDocument();
+    expect(mockedSaveSettings).not.toHaveBeenCalled();
+
+    await user.type(baseUrl, "https://api.deepseek.com/v1");
+    const model = within(dialog).getByLabelText("模型");
+    await user.clear(model);
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    expect(
+      within(dialog).getByText("启用 AI 补全时请填写模型名称。"),
+    ).toBeInTheDocument();
+
+    await user.type(model, "deepseek-chat");
+    await user.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() =>
+      expect(mockedSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          aiEnabled: true,
+          aiBaseUrl: "https://api.deepseek.com/v1",
+          aiModel: "deepseek-chat",
+        }),
+      ),
+    );
   });
 
   it("保存失败时保留输入并显示错误", async () => {
@@ -2641,6 +2681,7 @@ describe("TMDB 元数据刮削", () => {
           kind: "anime",
           source: "Bangumi",
           totalEpisodes: 28,
+          platform: "哔哩哔哩",
         },
       ],
       confident: true,
@@ -2656,6 +2697,7 @@ describe("TMDB 元数据刮削", () => {
       "勇者一行击败魔王后的故事。",
     );
     expect(within(form).getByLabelText(/总进度/)).toHaveValue(28);
+    expect(within(form).getByLabelText("平台")).toHaveValue("哔哩哔哩");
     expect(mockedSmartScrape).toHaveBeenCalledWith("葬送的芙莉莲", "drama");
     expect(mockedSearchTmdb).not.toHaveBeenCalled();
   });

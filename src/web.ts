@@ -575,6 +575,8 @@ function scrapeSourcePriority(source: string | null | undefined): number {
       return 3;
     case "Open Library":
       return 2;
+    case "AI":
+      return 1;
     default:
       return 0;
   }
@@ -631,6 +633,217 @@ function rankScrapeCandidates(
   return result;
 }
 
+interface AiPayloadJson {
+  title?: string | null;
+  originalTitle?: string | null;
+  year?: number | string | null;
+  rating?: number | string | null;
+  overview?: string | null;
+  platform?: string | null;
+  posterUrl?: string | null;
+}
+
+const AI_SYSTEM_PROMPT =
+  "你是影视、动漫、小说元数据助手。根据用户给出的作品名称与类型，返回真实存在的元数据。" +
+  "只输出一个 JSON 对象，不要输出 Markdown 代码块或解释文字。字段如下：" +
+  "title（中文标题，字符串）、originalTitle（原名，字符串或 null）、year（首播或出版年份，整数或 null）、" +
+  "rating（0 到 10 的评分，数字或 null）、overview（不超过 150 字的中文简介，字符串或 null）、" +
+  "platform（主要播出或阅读平台，字符串或 null）、posterUrl（公开可访问的 http/https 封面图片地址，字符串或 null）。" +
+  "不确定的字段一律填 null，禁止编造不存在的信息。";
+
+function aiMediaLabel(mediaType?: MediaType): string {
+  switch (mediaType) {
+    case "anime":
+      return "番剧";
+    case "novel":
+      return "小说";
+    case "movie":
+      return "电影";
+    case "variety":
+      return "综艺";
+    case "short_drama":
+      return "短剧";
+    case "drama":
+      return "剧集";
+    default:
+      return "影视作品";
+  }
+}
+
+function aiCandidateKind(mediaType?: MediaType): ScrapeCandidate["kind"] {
+  if (mediaType === "movie") return "movie";
+  if (mediaType === "anime") return "anime";
+  if (mediaType === "novel") return "novel";
+  return "tv";
+}
+
+function hashText(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function coerceAiYear(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value >= 1000 && value <= 2100 ? value : null;
+  }
+  if (typeof value === "string") {
+    const year = Number(value.trim().slice(0, 4));
+    return Number.isInteger(year) && year >= 1000 && year <= 2100 ? year : null;
+  }
+  return null;
+}
+
+function coerceAiRating(value: unknown): number | null {
+  const rating =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim())
+        : Number.NaN;
+  if (!Number.isFinite(rating) || rating < 0 || rating > 10) return null;
+  return roundOne(rating);
+}
+
+function truncateText(
+  value: string | null | undefined,
+  limit: number,
+): string | null {
+  const text = trimOrNull(value);
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function mapAiContent(
+  content: string,
+  mediaType?: MediaType,
+): ScrapeCandidate | null {
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    throw new Error("AI 返回内容中缺少 JSON 对象");
+  }
+  let payload: AiPayloadJson;
+  try {
+    payload = JSON.parse(content.slice(start, end + 1)) as AiPayloadJson;
+  } catch {
+    throw new Error("解析 AI 返回内容失败");
+  }
+  const title = trimOrNull(payload.title);
+  if (!title) return null;
+  const year = coerceAiYear(payload.year);
+  const poster = trimOrNull(payload.posterUrl);
+  return {
+    sourceId: hashText(`${title}|${year ?? ""}`),
+    title,
+    originalTitle: trimOrNull(payload.originalTitle),
+    year,
+    posterUrl: poster && /^https?:\/\//i.test(poster) ? poster : null,
+    rating: coerceAiRating(payload.rating),
+    overview: truncateText(payload.overview, 800),
+    kind: aiCandidateKind(mediaType),
+    source: "AI",
+    totalEpisodes: null,
+    platform: truncateText(payload.platform, 60),
+  };
+}
+
+async function requestAiCandidate(
+  settings: AppSettings,
+  query: string,
+  mediaType?: MediaType,
+): Promise<ScrapeCandidate | null> {
+  const base = settings.aiBaseUrl.trim().replace(/\/+$/, "");
+  const model = settings.aiModel.trim();
+  if (!base || !model) return null;
+  const url = base.endsWith("/chat/completions")
+    ? base
+    : `${base}/chat/completions`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const apiKey = settings.aiApiKey.trim();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: AI_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `作品名称：${query}\n类型：${aiMediaLabel(mediaType)}\n请只返回 JSON。`,
+        },
+      ],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`AI 请求失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = payload.choices
+    ?.map((choice) => choice.message?.content)
+    .find((value): value is string => Boolean(value));
+  if (!content) {
+    throw new Error("AI 未返回可用内容");
+  }
+  return mapAiContent(content, mediaType);
+}
+
+function enrichScrapeCandidate(
+  top: ScrapeCandidate,
+  ai: ScrapeCandidate,
+): ScrapeCandidate {
+  let used = false;
+  const next: ScrapeCandidate = { ...top };
+  if (!next.platform && ai.platform) {
+    next.platform = ai.platform;
+    used = true;
+  }
+  if (!next.overview && ai.overview) {
+    next.overview = ai.overview;
+    used = true;
+  }
+  if (!next.posterUrl && ai.posterUrl) {
+    next.posterUrl = ai.posterUrl;
+    used = true;
+  }
+  if (next.rating === null && ai.rating !== null) {
+    next.rating = ai.rating;
+    used = true;
+  }
+  if (!next.year && ai.year) {
+    next.year = ai.year;
+    used = true;
+  }
+  if (!next.originalTitle && ai.originalTitle) {
+    next.originalTitle = ai.originalTitle;
+    used = true;
+  }
+  if (used) {
+    next.source = top.source ? `${top.source} + AI` : "AI";
+  }
+  return next;
+}
+
+function isConfidentScrape(candidates: ScrapeCandidate[], key: string): boolean {
+  return (
+    candidates.length > 0 &&
+    Boolean(key) &&
+    [candidates[0].title, candidates[0].originalTitle].some(
+      (title) => normalizeScrapeKey(title ?? "") === key,
+    )
+  );
+}
+
 export async function smartScrapeWeb(
   query: string,
   mediaType?: MediaType,
@@ -682,14 +895,29 @@ export async function smartScrapeWeb(
     throw new Error(errors.join("\n"));
   }
 
-  const ranked = rankScrapeCandidates(candidates, trimmed);
+  let ranked = rankScrapeCandidates(candidates, trimmed);
   const key = normalizeScrapeKey(trimmed);
-  const confident =
-    ranked.length > 0 &&
-    Boolean(key) &&
-    [ranked[0].title, ranked[0].originalTitle].some(
-      (title) => normalizeScrapeKey(title ?? "") === key,
-    );
+  let confident = isConfidentScrape(ranked, key);
+
+  if (settings.aiEnabled) {
+    try {
+      const aiCandidate = await requestAiCandidate(settings, trimmed, mediaType);
+      if (aiCandidate) {
+        if (confident && ranked.length > 0) {
+          ranked = [enrichScrapeCandidate(ranked[0], aiCandidate), ...ranked.slice(1)];
+        } else {
+          ranked = rankScrapeCandidates([...ranked, aiCandidate], trimmed);
+          confident = isConfidentScrape(ranked, key);
+        }
+      }
+    } catch (error) {
+      if (ranked.length === 0) {
+        throw error;
+      }
+      // AI 兜底失败时保留免费多源的结果。
+    }
+  }
+
   return { candidates: ranked, confident };
 }
 

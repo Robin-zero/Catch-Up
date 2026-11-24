@@ -1114,12 +1114,23 @@ impl Database {
                 .cloned(),
             theme: normalize_theme(&text("theme")),
             library_view: normalize_library_view(&text("library_view")),
+            ai_enabled: values
+                .get("ai_enabled")
+                .is_some_and(|value| value == "true"),
+            ai_base_url: text("ai_base_url"),
+            ai_api_key: text("ai_api_key"),
+            ai_model: text("ai_model"),
         })
     }
 
     pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
         let settings = settings.validate()?;
         let webdav_enabled = if settings.webdav_enabled {
+            "true"
+        } else {
+            "false"
+        };
+        let ai_enabled = if settings.ai_enabled {
             "true"
         } else {
             "false"
@@ -1134,6 +1145,10 @@ impl Database {
             ("last_synced_at", last_synced_at),
             ("theme", settings.theme.as_str()),
             ("library_view", settings.library_view.as_str()),
+            ("ai_enabled", ai_enabled),
+            ("ai_base_url", settings.ai_base_url.as_str()),
+            ("ai_api_key", settings.ai_api_key.as_str()),
+            ("ai_model", settings.ai_model.as_str()),
         ];
 
         let mut connection = self.lock()?;
@@ -2849,6 +2864,7 @@ mod tests {
                     last_synced_at: Some(" 2026-11-20T00:00:00.000Z ".to_owned()),
                     theme: "  dark ".to_owned(),
                     library_view: "grid".to_owned(),
+                    ..AppSettings::default()
                 })
                 .unwrap()
         };

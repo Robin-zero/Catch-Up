@@ -1811,17 +1811,6 @@ kbd {
   color: var(--danger);
 }
 
-.form-success {
-  margin-bottom: 10px;
-  padding: 7px 9px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--accent);
-}
-
 .cover-picker {
   display: flex;
   align-items: center;
@@ -2129,13 +2118,31 @@ kbd {
   bottom: calc(70px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   z-index: 80;
-  padding: 8px 14px;
+  max-width: min(86vw, 420px);
+  padding: 9px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
-  background: rgba(28, 29, 26, 0.88);
+  background: rgba(28, 29, 26, 0.9);
   color: #fff;
   font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
   box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(10px);
   transform: translateX(-50%);
+  animation: toast-in 0.18s ease-out;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 @media (min-width: 761px) {

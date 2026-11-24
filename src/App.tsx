@@ -242,6 +242,33 @@ function LoadingState() {
   );
 }
 
+const TOAST_DURATION_MS = 3000;
+
+function Toast({
+  message,
+  onDismiss,
+}: {
+  message: string | null;
+  onDismiss: () => void;
+}) {
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+    const timer = window.setTimeout(onDismiss, TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [message, onDismiss]);
+
+  if (!message) {
+    return null;
+  }
+  return (
+    <div className="app-toast" role="status" aria-live="polite">
+      {message}
+    </div>
+  );
+}
+
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="content-state content-state--empty">
@@ -1506,6 +1533,7 @@ function ImportExcelDialog({
   const [importing, setImporting] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [templateNotice, setTemplateNotice] = useState<string | null>(null);
+  const dismissTemplateNotice = useCallback(() => setTemplateNotice(null), []);
   const importingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleId = "import-excel-title";
@@ -1608,11 +1636,7 @@ function ImportExcelDialog({
             </p>
           ) : null}
 
-          {templateNotice ? (
-            <p className="form-success" role="status">
-              {templateNotice}
-            </p>
-          ) : null}
+          <Toast message={templateNotice} onDismiss={dismissTemplateNotice} />
 
           <fieldset className="import-form__fields" disabled={importing}>
             <div className="form-field">
@@ -2922,6 +2946,7 @@ function App() {
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const dismissSettingsNotice = useCallback(() => setSettingsNotice(null), []);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({
     phase: "local",
@@ -3317,14 +3342,6 @@ function App() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (!settingsNotice) {
-      return;
-    }
-    const timer = window.setTimeout(() => setSettingsNotice(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [settingsNotice]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -3878,9 +3895,7 @@ function App() {
         />
       ) : null}
       {settingsNotice ? (
-        <div className="app-toast" role="status">
-          {settingsNotice}
-        </div>
+        <Toast message={settingsNotice} onDismiss={dismissSettingsNotice} />
       ) : null}
     </div>
   );

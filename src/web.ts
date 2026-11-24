@@ -843,24 +843,318 @@ export function syncWebNow(): SyncReport {
   return { merged: 0, uploaded: 0, downloaded: 0, lastSyncedAt: updated.lastSyncedAt! };
 }
 
-/** Excel 导入解析 —— 浏览器端实现（简化版，不依赖 xlsx 包）。
- *  支持 CSV 和 TSV；xlsx 需要真正的解析库，这里用 csv 默认 + 下载按钮提示。
- */
-export async function importWebExcel(
-  dataBase64: string,
-  defaultMediaType?: MediaType,
-): Promise<ImportReport> {
-  const text = atob(dataBase64);
-  const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((line) => line.length > 0);
-  if (lines.length < 2) {
-    return { imported: 0, skipped: 0, errors: ["文件内容为空。"], entries: [] };
-  }
-  const separator = lines[0].includes(",") && !lines[0].includes("\t") ? "," : "\t";
-  const headers = lines[0].split(separator).map((h) => h.trim());
-  const headerIndex = (name: string) =>
-    headers.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+interface ZipEntry {
+  name: string;
+  method: number;
+  compressedSize: number;
+  localOffset: number;
+}
 
+function base64ToBytes(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function readUint16(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUint32(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24)) >>>
+    0
+  );
+}
+
+function readZipEntries(bytes: Uint8Array): Map<string, ZipEntry> {
+  let eocd = -1;
+  const minimum = Math.max(0, bytes.length - 65557);
+  for (let offset = bytes.length - 22; offset >= minimum; offset -= 1) {
+    if (readUint32(bytes, offset) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) {
+    throw new Error("无法读取 xlsx 文件结构。");
+  }
+
+  const count = readUint16(bytes, eocd + 10);
+  let pointer = readUint32(bytes, eocd + 16);
+  const decoder = new TextDecoder();
+  const entries = new Map<string, ZipEntry>();
+  for (let index = 0; index < count; index += 1) {
+    if (
+      pointer + 46 > bytes.length ||
+      readUint32(bytes, pointer) !== 0x02014b50
+    ) {
+      break;
+    }
+    const method = readUint16(bytes, pointer + 10);
+    const compressedSize = readUint32(bytes, pointer + 20);
+    const nameLength = readUint16(bytes, pointer + 28);
+    const extraLength = readUint16(bytes, pointer + 30);
+    const commentLength = readUint16(bytes, pointer + 32);
+    const localOffset = readUint32(bytes, pointer + 42);
+    const name = decoder.decode(
+      bytes.subarray(pointer + 46, pointer + 46 + nameLength),
+    );
+    entries.set(name, { name, method, compressedSize, localOffset });
+    pointer += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+async function readZipEntry(
+  bytes: Uint8Array,
+  entries: Map<string, ZipEntry>,
+  name: string,
+): Promise<Uint8Array | null> {
+  const entry = entries.get(name);
+  if (!entry) {
+    return null;
+  }
+  if (readUint32(bytes, entry.localOffset) !== 0x04034b50) {
+    throw new Error("xlsx 文件结构损坏，无法读取内容。");
+  }
+  const nameLength = readUint16(bytes, entry.localOffset + 26);
+  const extraLength = readUint16(bytes, entry.localOffset + 28);
+  const start = entry.localOffset + 30 + nameLength + extraLength;
+  const compressed = bytes.subarray(start, start + entry.compressedSize);
+  if (entry.method === 0) {
+    return compressed;
+  }
+  if (entry.method !== 8 || typeof DecompressionStream === "undefined") {
+    throw new Error("当前浏览器不支持解析该 xlsx 文件，请改用 CSV 或桌面端导入。");
+  }
+  const source = new ReadableStream<BufferSource>({
+    start(controller) {
+      controller.enqueue(compressed as unknown as BufferSource);
+      controller.close();
+    },
+  });
+  const reader = source
+    .pipeThrough(new DecompressionStream("deflate-raw"))
+    .getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    total += value.length;
+  }
+  const output = new Uint8Array(total);
+  let position = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, position);
+    position += chunk.length;
+  }
+  return output;
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, value: string) =>
+      String.fromCodePoint(Number(value)),
+    )
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function xmlText(fragment: string): string {
+  return decodeXmlEntities(
+    (fragment.match(/<t\b[^>]*>([\s\S]*?)<\/t>/g) ?? [])
+      .map((item) => item.replace(/^<t\b[^>]*>/, "").replace(/<\/t>$/, ""))
+      .join(""),
+  );
+}
+
+function parseSharedStrings(xml: string): string[] {
+  return (xml.match(/<si\b[^>]*>[\s\S]*?<\/si>/g) ?? []).map((item) =>
+    xmlText(item),
+  );
+}
+
+function columnIndexFromName(name: string): number {
+  let index = 0;
+  for (const char of name) {
+    index = index * 26 + (char.charCodeAt(0) - 64);
+  }
+  return index - 1;
+}
+
+function parseWorksheetRows(xml: string, shared: string[]): string[][] {
+  const rows: string[][] = [];
+  for (const rowXml of xml.match(/<row\b[^>]*>[\s\S]*?<\/row>/g) ?? []) {
+    const cells: string[] = [];
+    for (const cellXml of rowXml.match(
+      /<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g,
+    ) ?? []) {
+      const reference = /\br="([A-Z]+)\d+"/.exec(cellXml)?.[1];
+      const index = reference ? columnIndexFromName(reference) : cells.length;
+      const type = /\bt="([^"]+)"/.exec(cellXml)?.[1];
+      let value = "";
+      if (type === "inlineStr") {
+        value = xmlText(cellXml);
+      } else {
+        const raw = /<v>([\s\S]*?)<\/v>/.exec(cellXml)?.[1] ?? "";
+        value =
+          type === "s"
+            ? (shared[Number(raw)] ?? "")
+            : decodeXmlEntities(raw);
+      }
+      cells[index] = value;
+    }
+    rows.push(cells);
+  }
+  return rows;
+}
+
+function resolveWorksheetPath(
+  entries: Map<string, ZipEntry>,
+  workbookXml: string,
+  relsXml: string | null,
+): string {
+  const relationId = /<sheet\b[^>]*\br:id="([^"]+)"/.exec(workbookXml)?.[1];
+  if (relationId && relsXml) {
+    for (const relation of relsXml.match(/<Relationship\b[^>]*\/?>/g) ?? []) {
+      if (/\bId="([^"]+)"/.exec(relation)?.[1] !== relationId) {
+        continue;
+      }
+      const target = /\bTarget="([^"]+)"/.exec(relation)?.[1];
+      if (!target) {
+        break;
+      }
+      if (target.startsWith("/")) {
+        return target.slice(1);
+      }
+      return target.startsWith("xl/") ? target : `xl/${target}`;
+    }
+  }
+  return entries.has("xl/worksheets/sheet1.xml")
+    ? "xl/worksheets/sheet1.xml"
+    : "";
+}
+
+async function readXlsxRows(bytes: Uint8Array): Promise<string[][]> {
+  const entries = readZipEntries(bytes);
+  const decoder = new TextDecoder();
+  const workbookName = entries.has("xl/workbook.xml")
+    ? "xl/workbook.xml"
+    : [...entries.keys()].find((name) => /(^|\/)workbook\.xml$/.test(name));
+  if (!workbookName) {
+    throw new Error("xlsx 文件缺少工作簿信息。");
+  }
+  const workbookBytes = await readZipEntry(bytes, entries, workbookName);
+  if (!workbookBytes) {
+    throw new Error("xlsx 文件缺少工作簿信息。");
+  }
+  const workbookXml = decoder.decode(workbookBytes);
+  const relsBytes = await readZipEntry(
+    bytes,
+    entries,
+    "xl/_rels/workbook.xml.rels",
+  );
+  const sheetPath = resolveWorksheetPath(
+    entries,
+    workbookXml,
+    relsBytes ? decoder.decode(relsBytes) : null,
+  );
+  if (!sheetPath) {
+    throw new Error("xlsx 文件没有可用的工作表。");
+  }
+  const sheetBytes = await readZipEntry(bytes, entries, sheetPath);
+  if (!sheetBytes) {
+    throw new Error("xlsx 文件没有可用的工作表。");
+  }
+  const sharedBytes = await readZipEntry(
+    bytes,
+    entries,
+    "xl/sharedStrings.xml",
+  );
+  const shared = sharedBytes
+    ? parseSharedStrings(decoder.decode(sharedBytes))
+    : [];
+  return parseWorksheetRows(decoder.decode(sheetBytes), shared);
+}
+
+function splitDelimitedLine(line: string, separator: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quoted) {
+      if (char === '"') {
+        if (line[index + 1] === '"') {
+          current += '"';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        current += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === separator) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current);
+  return cells;
+}
+
+function parseDelimitedRows(text: string): string[][] {
+  const normalized = text
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n").filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    return [];
+  }
+  const separator =
+    lines[0].includes(",") && !lines[0].includes("\t") ? "," : "\t";
+  return lines.map((line) => splitDelimitedLine(line, separator));
+}
+
+function importRows(
+  rows: string[][],
+  defaultMediaType?: MediaType,
+): ImportReport {
   const result: ImportReport = { imported: 0, skipped: 0, errors: [], entries: [] };
+  const headerRowIndex = rows.findIndex((row) =>
+    row.some((cell) => cell.trim() === "标题"),
+  );
+  const headerRow = rows[headerRowIndex >= 0 ? headerRowIndex : 0] ?? [];
+  const headers = headerRow.map((header) => header.trim());
+  const headerIndex = (name: string) =>
+    headers.findIndex((header) => header.toLowerCase() === name.toLowerCase());
+
+  const titleColumn = headerIndex("标题");
+  if (titleColumn < 0) {
+    throw new Error("缺少“标题”列，请使用导入模板重新填写。");
+  }
+
   const existing = readWebEntries();
   const mediaMap: Record<string, MediaType> = {
     剧集: "drama",
@@ -885,43 +1179,57 @@ export async function importWebExcel(
     dropped: "dropped",
   };
 
-  for (let i = 1; i < lines.length; i += 1) {
-    const cols = lines[i].split(separator);
-    const title = cols[headerIndex("标题")]?.trim();
-    if (!title) {
-      result.skipped += 1;
+  const startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+  for (let index = startRow; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (!row || row.every((cell) => !cell.trim())) {
       continue;
     }
-    const mediaLabel = cols[headerIndex("类型")]?.trim() || "";
+    const column = (name: string) => {
+      const position = headerIndex(name);
+      return position >= 0 ? (row[position] ?? "").trim() : "";
+    };
+
+    const title = column("标题");
+    if (!title) {
+      result.skipped += 1;
+      result.errors.push(`第 ${index + 1} 行：标题不能为空。`);
+      continue;
+    }
+    const mediaLabel = column("类型");
     const mediaType =
       mediaMap[mediaLabel.toLowerCase()] ??
       mediaMap[mediaLabel] ??
       defaultMediaType ??
       null;
     if (!mediaType) {
-      result.errors.push(`第 ${i + 1} 行：类型无效。`);
+      result.errors.push(`第 ${index + 1} 行：类型无效。`);
       result.skipped += 1;
       continue;
     }
-    const statusLabel = cols[headerIndex("状态")]?.trim() || "在追";
-    const status = statusMap[statusLabel.toLowerCase()] ?? statusMap[statusLabel] ?? "tracking";
+    const statusLabel = column("状态") || "在追";
+    const status =
+      statusMap[statusLabel.toLowerCase()] ?? statusMap[statusLabel] ?? "tracking";
     const entry: MediaEntry = {
       id: uuid(),
       title,
       mediaType,
-      currentProgress: Number(cols[headerIndex("当前进度")] ?? 0) || 0,
-      totalProgress:
-        Number(cols[headerIndex("总进度")] ?? "") || null,
+      currentProgress: Number(column("当前进度")) || 0,
+      totalProgress: Number(column("总进度")) || null,
       status,
-      season: normalizeSeason(cols[headerIndex("季")]),
-      rating: Number(cols[headerIndex("评分")] ?? "") || null,
-      platform: cols[headerIndex("平台")]?.trim() || null,
-      coverUrl: cols[headerIndex("封面")]?.trim() || null,
-      overview: cols[headerIndex("简介")]?.trim() || null,
+      season: normalizeSeason(column("季")),
+      rating: Number(column("评分")) || null,
+      platform: column("平台") || null,
+      coverUrl: column("封面") || null,
+      overview: column("简介") || null,
       createdAt: now(),
       updatedAt: now(),
     };
-    if (existing.some((e) => e.title === entry.title && e.mediaType === entry.mediaType)) {
+    if (
+      existing.some(
+        (item) => item.title === entry.title && item.mediaType === entry.mediaType,
+      )
+    ) {
       result.skipped += 1;
       continue;
     }
@@ -931,6 +1239,27 @@ export async function importWebExcel(
   }
   writeWebEntries(existing);
   return result;
+}
+
+/** Excel 导入解析：浏览器端支持 CSV/TSV 与 xlsx（包括压缩条目）。 */
+export async function importWebExcel(
+  dataBase64: string,
+  defaultMediaType?: MediaType,
+): Promise<ImportReport> {
+  const bytes = base64ToBytes(dataBase64);
+  const isZip =
+    bytes.length >= 4 &&
+    bytes[0] === 0x50 &&
+    bytes[1] === 0x4b &&
+    bytes[2] === 0x03 &&
+    bytes[3] === 0x04;
+  const rows = isZip
+    ? await readXlsxRows(bytes)
+    : parseDelimitedRows(new TextDecoder().decode(bytes));
+  if (rows.length === 0) {
+    return { imported: 0, skipped: 0, errors: ["文件内容为空。"], entries: [] };
+  }
+  return importRows(rows, defaultMediaType);
 }
 
 /**

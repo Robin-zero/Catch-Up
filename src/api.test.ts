@@ -20,7 +20,7 @@ import {
   aiScrape,
   updateEntry,
 } from "./api";
-import { generateWebTemplate } from "./web";
+import { generateWebTemplate, importWebExcel } from "./web";
 import {
   DEFAULT_SETTINGS,
   type EntryInput,
@@ -104,6 +104,17 @@ describe("Tauri 数据访问", () => {
 
     await expect(downloadExcelTemplate()).resolves.toBe("UEsDBA==");
     expect(mockedInvoke).toHaveBeenCalledWith("download_excel_template");
+  });
+
+  it("Web 端可直接导入生成的 xlsx 模板", async () => {
+    localStorage.clear();
+    const report = await importWebExcel(generateWebTemplate(), "drama");
+
+    expect(report.imported).toBe(1);
+    expect(report.skipped).toBe(0);
+    expect(report.entries[0].title).toBe("庆余年");
+    expect(report.entries[0].mediaType).toBe("drama");
+    expect(report.entries[0].totalProgress).toBe(36);
   });
 
   it("Web 端模板生成与桌面端一致的 xlsx", () => {

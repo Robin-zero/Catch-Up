@@ -184,6 +184,35 @@ function MediaTypeIcon({ type }: { type: MediaType }) {
   );
 }
 
+function ImportIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M5 2.8h6l4 4V17.2H5V2.8Z" />
+      <path d="M11 2.8v4h4" />
+      <path d="M10 9v4.4m0 0 1.7-1.7M10 13.4l-1.7-1.7" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 5.5h12M8 3h4" />
+      <path d="M5.8 5.5h8.4l-.6 9.6a1.8 1.8 0 0 1-1.8 1.6H8.2a1.8 1.8 0 0 1-1.8-1.6L5.8 5.5Z" />
+      <path d="M8.5 8.6v4.6M11.5 8.6v4.6" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 function EntryTile({
   type,
   coverUrl,
@@ -195,6 +224,7 @@ function EntryTile({
   const [failedCoverUrl, setFailedCoverUrl] = useState<string | null>(null);
   const showCover =
     Boolean(coverUrl) && !(coverFailed && failedCoverUrl === coverUrl);
+  const coverSrc = showCover && coverUrl ? resolveCoverSrc(coverUrl) : null;
 
   return (
     <span
@@ -203,17 +233,25 @@ function EntryTile({
       }`}
       aria-hidden="true"
     >
-      {showCover && coverUrl ? (
-        <img
-          className="entry__cover"
-          src={resolveCoverSrc(coverUrl)}
-          alt=""
-          loading="lazy"
-          onError={() => {
-            setFailedCoverUrl(coverUrl);
-            setCoverFailed(true);
-          }}
-        />
+      {coverSrc ? (
+        <>
+          <img
+            className="entry__cover-backdrop"
+            src={coverSrc}
+            alt=""
+            loading="lazy"
+          />
+          <img
+            className="entry__cover"
+            src={coverSrc}
+            alt=""
+            loading="lazy"
+            onError={() => {
+              setFailedCoverUrl(coverUrl ?? null);
+              setCoverFailed(true);
+            }}
+          />
+        </>
       ) : (
         <MediaTypeIcon type={type} />
       )}
@@ -1051,7 +1089,7 @@ function EntryFormDialog({
             </div>
 
             {!isMovie ? (
-              <div className="entry-form__progress-row">
+              <div className="entry-form__row">
                 <div className="form-field">
                   <label htmlFor="entry-current-progress">
                     当前进度（{unit}）
@@ -1116,28 +1154,11 @@ function EntryFormDialog({
               </div>
             ) : null}
 
-            <div className="form-field">
-              <label htmlFor="entry-status">状态</label>
-              <select
-                id="entry-status"
-                name="status"
-                value={values.status}
-                onChange={(event) =>
-                  changeField(
-                    "status",
-                    event.target.value as EntryFormValues["status"],
-                  )
-                }
-              >
-                {ENTRY_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {ENTRY_STATUS_LABELS[status]}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="entry-form__progress-row">
+            <div
+              className={`entry-form__row${
+                isMovie ? " entry-form__row--single" : ""
+              }`}
+            >
               {!isMovie ? (
                 <div className="form-field">
                   <label htmlFor="entry-season">季</label>
@@ -1168,6 +1189,29 @@ function EntryFormDialog({
               ) : null}
 
               <div className="form-field">
+                <label htmlFor="entry-status">状态</label>
+                <select
+                  id="entry-status"
+                  name="status"
+                  value={values.status}
+                  onChange={(event) =>
+                    changeField(
+                      "status",
+                      event.target.value as EntryFormValues["status"],
+                    )
+                  }
+                >
+                  {ENTRY_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {ENTRY_STATUS_LABELS[status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="entry-form__row">
+              <div className="form-field">
                 <label htmlFor="entry-platform">平台</label>
                 <input
                   id="entry-platform"
@@ -1197,9 +1241,7 @@ function EntryFormDialog({
                   </p>
                 ) : null}
               </div>
-            </div>
 
-            <div className="entry-form__progress-row">
               <div className="form-field">
                 <label htmlFor="entry-rating">评分</label>
                 <input
@@ -1229,59 +1271,59 @@ function EntryFormDialog({
                   <p className="field-hint">选填，0–10，最多 1 位小数</p>
                 )}
               </div>
+            </div>
 
-              <div className="form-field">
-                <label htmlFor="entry-cover-url">封面</label>
-                <div className="cover-picker">
-                  <input
-                    id="entry-cover-url"
-                    name="coverUrl"
-                    type="text"
-                    placeholder="https://… 或选择本地图片"
-                    value={values.coverUrl}
-                    aria-invalid={errors.coverUrl ? true : undefined}
-                    aria-describedby={
-                      errors.coverUrl ? "entry-cover-url-error" : undefined
-                    }
-                    ref={coverUrlRef}
-                    onChange={(event) =>
-                      changeField("coverUrl", event.target.value)
-                    }
-                  />
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    disabled={saving || importingCover}
-                    onClick={() => coverFileRef.current?.click()}
-                  >
-                    {importingCover ? "导入中…" : "本地图片"}
-                  </button>
-                  <input
-                    ref={coverFileRef}
-                    className="cover-picker__file"
-                    type="file"
-                    accept="image/*"
-                    aria-label="选择本地封面图片"
-                    onChange={(event) => {
-                      void handleCoverFile(event);
-                    }}
-                  />
-                </div>
-                {errors.coverUrl ? (
-                  <p className="field-error" id="entry-cover-url-error">
-                    {errors.coverUrl}
-                  </p>
-                ) : (
-                  <p className="field-hint">选填，支持链接或本地图片</p>
-                )}
-                {values.coverUrl ? (
-                  <img
-                    className="cover-picker__preview"
-                    src={resolveCoverSrc(values.coverUrl)}
-                    alt="封面预览"
-                  />
-                ) : null}
+            <div className="form-field">
+              <label htmlFor="entry-cover-url">封面</label>
+              <div className="cover-picker">
+                <input
+                  id="entry-cover-url"
+                  name="coverUrl"
+                  type="text"
+                  placeholder="https://… 或选择本地图片"
+                  value={values.coverUrl}
+                  aria-invalid={errors.coverUrl ? true : undefined}
+                  aria-describedby={
+                    errors.coverUrl ? "entry-cover-url-error" : undefined
+                  }
+                  ref={coverUrlRef}
+                  onChange={(event) =>
+                    changeField("coverUrl", event.target.value)
+                  }
+                />
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={saving || importingCover}
+                  onClick={() => coverFileRef.current?.click()}
+                >
+                  {importingCover ? "导入中…" : "本地图片"}
+                </button>
+                <input
+                  ref={coverFileRef}
+                  className="cover-picker__file"
+                  type="file"
+                  accept="image/*"
+                  aria-label="选择本地封面图片"
+                  onChange={(event) => {
+                    void handleCoverFile(event);
+                  }}
+                />
               </div>
+              {errors.coverUrl ? (
+                <p className="field-error" id="entry-cover-url-error">
+                  {errors.coverUrl}
+                </p>
+              ) : (
+                <p className="field-hint">选填，支持链接或本地图片</p>
+              )}
+              {values.coverUrl ? (
+                <img
+                  className="cover-picker__preview"
+                  src={resolveCoverSrc(values.coverUrl)}
+                  alt="封面预览"
+                />
+              ) : null}
             </div>
 
             <div className="form-field">
@@ -2584,9 +2626,7 @@ function Sidebar({
           aria-pressed={view === "trash"}
           onClick={onOpenTrash}
         >
-          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M3.5 5.5h13M8 3h4M5.5 5.5 6.2 17h7.6l.7-11.5M8.3 8.5v5M11.7 8.5v5" />
-          </svg>
+          <TrashIcon />
           <span className="sidebar__label">回收站</span>
           <span className="sidebar__count">{trashCount}</span>
         </button>
@@ -2599,9 +2639,7 @@ function Sidebar({
           aria-label="导入 Excel"
           onClick={onImport}
         >
-          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
-          </svg>
+          <ImportIcon />
           <span>导入 Excel</span>
         </button>
         <button
@@ -2610,10 +2648,7 @@ function Sidebar({
           aria-label="设置"
           onClick={onOpenSettings}
         >
-          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <circle cx="10" cy="10" r="2.6" />
-            <path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1" />
-          </svg>
+          <SettingsIcon />
           <span>设置</span>
         </button>
         <div className="sidebar__db-status">
@@ -2704,6 +2739,9 @@ function EntryRow({
   onEdit,
   onDelete,
   trashActions,
+  selectable = false,
+  selected = false,
+  onSelectedChange,
 }: {
   entry: MediaEntry;
   pending: boolean;
@@ -2713,6 +2751,9 @@ function EntryRow({
   onEdit?: () => void;
   onDelete?: () => void;
   trashActions?: { onRestore: () => void; onPurge: () => void };
+  selectable?: boolean;
+  selected?: boolean;
+  onSelectedChange?: (selected: boolean) => void;
 }) {
   const percentage = getProgressPercentage(entry);
   const isMovie = entry.mediaType === "movie";
@@ -2726,7 +2767,9 @@ function EntryRow({
   return (
     <li className="entry-list__item">
       <article
-        className={`entry entry--${entry.mediaType}`}
+        className={`entry entry--${entry.mediaType}${
+          selected ? " entry--selected" : ""
+        }`}
         aria-labelledby={titleId}
         aria-busy={pending}
         onDoubleClick={(event) => {
@@ -2735,7 +2778,26 @@ function EntryRow({
           }
           onEdit();
         }}
+        onClick={(event) => {
+          if (!selectable) {
+            return;
+          }
+          if ((event.target as HTMLElement).closest("button, input, label")) {
+            return;
+          }
+          onSelectedChange?.(!selected);
+        }}
       >
+        {selectable ? (
+          <label className="entry__select">
+            <input
+              type="checkbox"
+              checked={selected}
+              aria-label={`选择《${entry.title}》`}
+              onChange={(event) => onSelectedChange?.(event.target.checked)}
+            />
+          </label>
+        ) : null}
         <EntryTile type={entry.mediaType} coverUrl={entry.coverUrl} />
 
         <div className="entry__body">
@@ -2947,6 +3009,11 @@ function App() {
     null,
   );
   const [pendingPurge, setPendingPurge] = useState<MediaEntry | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(() => ({
@@ -2999,6 +3066,7 @@ function App() {
     editor !== null ||
     pendingDeletion !== null ||
     pendingPurge !== null ||
+    batchDeleteOpen ||
     emptyTrashOpen ||
     importOpen ||
     settingsOpen;
@@ -3114,6 +3182,72 @@ function App() {
     setPendingDeletion(null);
     scheduleSyncRef.current();
     void loadTrash();
+  }
+
+  function toggleSelecting() {
+    setSelecting((current) => {
+      if (current) {
+        setSelectedIds(new Set());
+      }
+      return !current;
+    });
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSelectedIds(new Set(visibleEntries.map((entry) => entry.id)));
+  }
+
+  async function handleBatchDelete() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const deleted: string[] = [];
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        await deleteEntry(id);
+        deleted.push(id);
+      } catch {
+        failed.push(id);
+      }
+    }
+
+    if (deleted.length > 0) {
+      setLibrary((current) =>
+        current.status === "success"
+          ? {
+              status: "success",
+              entries: current.entries.filter(
+                (entry) => !deleted.includes(entry.id),
+              ),
+            }
+          : current,
+      );
+      scheduleSyncRef.current();
+      void loadTrash();
+    }
+
+    if (failed.length > 0) {
+      setSelectedIds(new Set(failed));
+      throw new Error(`${failed.length} 项删除失败，请重试。`);
+    }
+
+    setSelecting(false);
+    setSelectedIds(new Set());
+    setBatchDeleteOpen(false);
   }
 
   const loadEntries = useCallback(async () => {
@@ -3410,6 +3544,14 @@ function App() {
   }, [settings.theme]);
 
   const isTrashView = view === "trash";
+
+  useEffect(() => {
+    if (isTrashView && selecting) {
+      setSelecting(false);
+      setSelectedIds(new Set());
+    }
+  }, [isTrashView, selecting]);
+
   const normalizedTitleQuery = titleQuery.trim().toLowerCase();
   const allEntries = library.status === "success" ? library.entries : [];
   const trashEntries = trash.status === "success" ? trash.entries : [];
@@ -3592,9 +3734,7 @@ function App() {
               aria-label="导入 Excel"
               onClick={() => setImportOpen(true)}
             >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M10 3v8m0 0 3-3m-3 3L7 8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14" />
-              </svg>
+              <ImportIcon />
             </button>
             <button
               className="icon-button topbar__trash-button"
@@ -3607,9 +3747,7 @@ function App() {
                 )
               }
             >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M3.5 5.5h13M8 3h4M5.5 5.5 6.2 17h7.6l.7-11.5M8.3 8.5v5M11.7 8.5v5" />
-              </svg>
+              <TrashIcon />
             </button>
 
             <button
@@ -3618,11 +3756,22 @@ function App() {
               aria-label="设置"
               onClick={() => setSettingsOpen(true)}
             >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <circle cx="10" cy="10" r="2.6" />
-                <path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1" />
-              </svg>
+              <SettingsIcon />
             </button>
+
+            {!isTrashView ? (
+              <button
+                className={`ghost-button batch-toggle${
+                  selecting ? " batch-toggle--active" : ""
+                }`}
+                type="button"
+                aria-pressed={selecting}
+                aria-label={selecting ? "退出批量删除" : "批量删除"}
+                onClick={toggleSelecting}
+              >
+                {selecting ? "退出批量" : "批量删除"}
+              </button>
+            ) : null}
 
             {!isTrashView ? (
               <button
@@ -3701,6 +3850,36 @@ function App() {
             </>
           ) : (
             <>
+              {selecting ? (
+                <div className="batch-bar" role="region" aria-label="批量删除">
+                  <span className="batch-bar__count">
+                    已选择 {selectedIds.size} 项
+                  </span>
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={selectAllVisible}
+                  >
+                    全选当前列表
+                  </button>
+                  <button
+                    className="danger-outline-button batch-bar__delete"
+                    type="button"
+                    disabled={selectedIds.size === 0}
+                    onClick={() => setBatchDeleteOpen(true)}
+                  >
+                    删除所选
+                  </button>
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={toggleSelecting}
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : null}
+
               {library.status === "success" && library.entries.length > 0 ? (
                 <SummaryStrip entries={library.entries} />
               ) : null}
@@ -3732,8 +3911,15 @@ function App() {
                       onWrite={(action) => {
                         void handleEntryWrite(entry, action);
                       }}
-                      onEdit={() => setEditor({ mode: "edit", entry })}
+                      onEdit={
+                        selecting
+                          ? undefined
+                          : () => setEditor({ mode: "edit", entry })
+                      }
                       onDelete={() => setPendingDeletion(entry)}
+                      selectable={selecting}
+                      selected={selectedIds.has(entry.id)}
+                      onSelectedChange={() => toggleSelected(entry.id)}
                     />
                   ))}
                 </ul>
@@ -3875,6 +4061,19 @@ function App() {
             void loadEntries();
             scheduleSyncRef.current();
           }}
+        />
+      ) : null}
+      {batchDeleteOpen ? (
+        <ConfirmActionDialog
+          title="批量删除条目"
+          titleId="batch-delete-title"
+          description={`将选中的 ${selectedIds.size} 个条目移入回收站？删除后可在回收站中找回。`}
+          confirmLabel="删除所选"
+          busyLabel="删除中…"
+          fallbackError="批量删除失败，请重试。"
+          fallbackFocusRef={addButtonRef}
+          onClose={() => setBatchDeleteOpen(false)}
+          onConfirm={handleBatchDelete}
         />
       ) : null}
       {emptyTrashOpen ? (

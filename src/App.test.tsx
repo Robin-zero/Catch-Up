@@ -1266,6 +1266,46 @@ describe("条目管理", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("article", { name: target.title })).toBeVisible();
   });
+
+  it("批量删除：选择条目、确认后只删除所选并退出选择模式", async () => {
+    const user = userEvent.setup();
+    const first = makeEntry({ id: "batch-1", title: "批量删除一" });
+    const second = makeEntry({ id: "batch-2", title: "批量删除二" });
+    const keep = makeEntry({ id: "batch-3", title: "保留不删" });
+    mockedListEntries.mockResolvedValue([first, second, keep]);
+    mockedDeleteEntry.mockResolvedValue(undefined);
+    render(<App />);
+
+    await screen.findByRole("article", { name: first.title });
+
+    await user.click(screen.getByRole("button", { name: "批量删除" }));
+    const batchBar = screen.getByRole("region", { name: "批量删除" });
+    expect(batchBar).toHaveTextContent("已选择 0 项");
+
+    await user.click(
+      screen.getByRole("checkbox", { name: `选择《${first.title}》` }),
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: `选择《${second.title}》` }),
+    );
+    expect(batchBar).toHaveTextContent("已选择 2 项");
+
+    await user.click(within(batchBar).getByRole("button", { name: "删除所选" }));
+    const dialog = screen.getByRole("dialog", { name: "批量删除条目" });
+    await user.click(within(dialog).getByRole("button", { name: "删除所选" }));
+
+    await waitFor(() => {
+      expect(mockedDeleteEntry).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedDeleteEntry).toHaveBeenCalledWith(first.id);
+    expect(mockedDeleteEntry).toHaveBeenCalledWith(second.id);
+    await waitFor(() => {
+      expect(screen.queryByRole("article", { name: first.title })).toBeNull();
+    });
+    expect(screen.queryByRole("article", { name: second.title })).toBeNull();
+    expect(screen.getByRole("article", { name: keep.title })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "批量删除" })).toBeNull();
+  });
 });
 
 describe("回收站", () => {

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -8,7 +8,7 @@ use uuid::Uuid;
 /// 单张封面允许的最大体积（10MB），避免误传超大图片撑爆数据目录。
 const MAX_COVER_BYTES: usize = 10 * 1024 * 1024;
 
-fn covers_directory(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn covers_directory(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_data_dir()
@@ -24,24 +24,41 @@ fn normalize_extension(extension: Option<String>) -> String {
         .map(str::trim)
         .map(str::to_ascii_lowercase)
     {
-        Some(value) if matches!(value.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+            ) =>
+        {
             value
         }
         _ => "jpg".to_owned(),
     }
 }
 
-fn write_cover(app: &AppHandle, bytes: &[u8], extension: &str) -> Result<String, String> {
+pub(crate) fn write_cover_to(
+    directory: &Path,
+    bytes: &[u8],
+    extension: &str,
+) -> Result<String, String> {
     if bytes.is_empty() {
         return Err("封面图片内容为空".to_owned());
     }
     if bytes.len() > MAX_COVER_BYTES {
         return Err("封面图片不能超过 10MB".to_owned());
     }
-    let directory = covers_directory(app)?;
-    let path = directory.join(format!("cover-{}.{}", Uuid::new_v4(), extension));
+    let path = directory.join(format!(
+        "cover-{}.{}",
+        Uuid::new_v4(),
+        normalize_extension(Some(extension.to_owned()))
+    ));
     std::fs::write(&path, bytes).map_err(|error| format!("无法保存封面图片：{error}"))?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+fn write_cover(app: &AppHandle, bytes: &[u8], extension: &str) -> Result<String, String> {
+    let directory = covers_directory(app)?;
+    write_cover_to(&directory, bytes, extension)
 }
 
 /// 把前端选中的本地图片（base64）保存到应用数据目录，返回本地绝对路径。

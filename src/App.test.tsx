@@ -236,9 +236,14 @@ describe("内容库", () => {
     cases.forEach((item, index) => {
       const card = screen.getByRole("article", { name: item.title });
       expect(within(card).getByText(item.label)).toBeInTheDocument();
-      expect(
-        within(card).getByText(`${index + 1} / 10 ${item.unit}`),
-      ).toBeInTheDocument();
+      if (item.mediaType === "movie") {
+        expect(within(card).queryByRole("progressbar")).toBeNull();
+        expect(within(card).queryByText(/\/ 10 部/)).toBeNull();
+      } else {
+        expect(
+          within(card).getByText(`${index + 1} / 10 ${item.unit}`),
+        ).toBeInTheDocument();
+      }
     });
   });
 
@@ -1121,7 +1126,7 @@ describe("条目管理", () => {
     expect(mockedCreateEntry).not.toHaveBeenCalled();
   });
 
-  it("选择电影时为空总进度默认填 1，并随类型展示正确单位", async () => {
+  it("选择电影时隐藏进度与季字段，切换类型后恢复", async () => {
     const user = userEvent.setup();
     mockedListEntries.mockResolvedValue([]);
     render(<App />);
@@ -1131,17 +1136,18 @@ describe("条目管理", () => {
     const dialog = screen.getByRole("dialog", { name: "添加条目" });
     await user.selectOptions(within(dialog).getByLabelText("类型"), "movie");
 
-    expect(
-      within(dialog).getByLabelText("总进度（部，选填）"),
-    ).toHaveDisplayValue("1");
-    expect(
-      within(dialog).getByLabelText("当前进度（部）"),
-    ).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/当前进度/)).toBeNull();
+    expect(within(dialog).queryByLabelText(/总进度/)).toBeNull();
+    expect(within(dialog).queryByLabelText("季")).toBeNull();
 
     await user.selectOptions(within(dialog).getByLabelText("类型"), "variety");
-    const totalProgress = within(dialog).getByLabelText("总进度（集，选填）");
-    await user.clear(totalProgress);
-    expect(totalProgress).toHaveDisplayValue("");
+    expect(
+      within(dialog).getByLabelText("当前进度（集）"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByLabelText("总进度（集，选填）"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("季")).toBeInTheDocument();
   });
 
   it("后端保存失败时在表单内显示写入错误并保留全部输入", async () => {
@@ -2574,7 +2580,6 @@ describe("TMDB 元数据刮削", () => {
     await user.selectOptions(within(form).getByLabelText("类型"), "movie");
     await user.type(within(form).getByLabelText("标题"), "我的沙丘");
     await user.type(within(form).getByLabelText("平台"), "腾讯视频");
-    await user.type(within(form).getByLabelText(/当前进度/), "1");
     const scrape = await openScrapeDialog(user, form);
     mockedSearchTmdb.mockResolvedValue([candidate]);
     await user.click(within(scrape).getByRole("button", { name: "搜索" }));
@@ -2597,7 +2602,6 @@ describe("TMDB 元数据刮削", () => {
       "保罗与弗雷曼人联手，向背叛者复仇。",
     );
     expect(within(form).getByLabelText("平台")).toHaveValue("腾讯视频");
-    expect(within(form).getByLabelText(/当前进度/)).toHaveValue(1);
     expect(mockedSearchTmdb).toHaveBeenCalledWith("我的沙丘", "movie");
   });
 

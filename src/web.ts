@@ -1021,7 +1021,9 @@ function parseWorksheetRows(xml: string, shared: string[]): string[][] {
       }
       cells[index] = value;
     }
-    rows.push(cells);
+    const rowNumber = Number(/\br="(\d+)"/.exec(rowXml)?.[1]);
+    const position = rowNumber > 0 ? rowNumber - 1 : rows.length;
+    rows[position] = cells;
   }
   return rows;
 }
@@ -1052,7 +1054,144 @@ function resolveWorksheetPath(
     : "";
 }
 
-async function readXlsxRows(bytes: Uint8Array): Promise<string[][]> {
+function zipDirectory(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index >= 0 ? path.slice(0, index) : "";
+}
+
+function zipBaseName(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index >= 0 ? path.slice(index + 1) : path;
+}
+
+function resolveZipTarget(baseDirectory: string, target: string): string {
+  if (target.startsWith("/")) {
+    return target.slice(1);
+  }
+  const segments = baseDirectory.split("/").filter(Boolean);
+  for (const part of target.split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      segments.pop();
+    } else {
+      segments.push(part);
+    }
+  }
+  return segments.join("/");
+}
+
+function parseRelationships(xml: string): Map<string, string> {
+  const relationships = new Map<string, string>();
+  for (const relation of xml.match(/<Relationship\b[^>]*\/?>/g) ?? []) {
+    const id = /\bId="([^"]+)"/.exec(relation)?.[1];
+    const target = /\bTarget="([^"]+)"/.exec(relation)?.[1];
+    if (id && target) {
+      relationships.set(id, target);
+    }
+  }
+  return relationships;
+}
+
+function imageMimeType(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "png":
+      return "image/png";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "bmp":
+      return "image/bmp";
+    default:
+      return "image/jpeg";
+  }
+}
+
+/** 读取工作表中嵌入的封面图片，按行号映射为 data URL。 */
+async function readEmbeddedCovers(
+  bytes: Uint8Array,
+  entries: Map<string, ZipEntry>,
+  sheetPath: string,
+  sheetXml: string,
+): Promise<Map<number, string>> {
+  const covers = new Map<number, string>();
+  const drawingId = /<drawing\b[^>]*\br:id="([^"]+)"/.exec(sheetXml)?.[1];
+  if (!drawingId) {
+    return covers;
+  }
+  const decoder = new TextDecoder();
+  const sheetDirectory = zipDirectory(sheetPath);
+  const sheetRels = await readZipEntry(
+    bytes,
+    entries,
+    `${sheetDirectory}/_rels/${zipBaseName(sheetPath)}.rels`,
+  );
+  if (!sheetRels) {
+    return covers;
+  }
+  const drawingTarget = parseRelationships(decoder.decode(sheetRels)).get(
+    drawingId,
+  );
+  if (!drawingTarget) {
+    return covers;
+  }
+  const drawingPath = resolveZipTarget(sheetDirectory, drawingTarget);
+  const drawingBytes = await readZipEntry(bytes, entries, drawingPath);
+  if (!drawingBytes) {
+    return covers;
+  }
+  const drawingDirectory = zipDirectory(drawingPath);
+  const drawingRelsBytes = await readZipEntry(
+    bytes,
+    entries,
+    `${drawingDirectory}/_rels/${zipBaseName(drawingPath)}.rels`,
+  );
+  const drawingRelationships = drawingRelsBytes
+    ? parseRelationships(decoder.decode(drawingRelsBytes))
+    : new Map<string, string>();
+  const drawingXml = decoder.decode(drawingBytes);
+
+  const anchors =
+    drawingXml.match(
+      /<(?:xdr:)?(?:twoCellAnchor|oneCellAnchor)\b[\s\S]*?<\/(?:xdr:)?(?:twoCellAnchor|oneCellAnchor)>/g,
+    ) ?? [];
+  for (const anchor of anchors) {
+    const from = /<(?:xdr:)?from>([\s\S]*?)<\/(?:xdr:)?from>/.exec(anchor)?.[1];
+    if (!from) {
+      continue;
+    }
+    const column = Number(/<(?:xdr:)?col>(\d+)<\/(?:xdr:)?col>/.exec(from)?.[1]);
+    const row = Number(/<(?:xdr:)?row>(\d+)<\/(?:xdr:)?row>/.exec(from)?.[1]);
+    if (column !== 8 || !Number.isFinite(row)) {
+      continue;
+    }
+    const embedId = /<(?:a:)?blip\b[^>]*\br:embed="([^"]+)"/.exec(anchor)?.[1];
+    if (!embedId) {
+      continue;
+    }
+    const imageTarget = drawingRelationships.get(embedId);
+    if (!imageTarget) {
+      continue;
+    }
+    const imagePath = resolveZipTarget(drawingDirectory, imageTarget);
+    const imageBytes = await readZipEntry(bytes, entries, imagePath);
+    if (!imageBytes) {
+      continue;
+    }
+    covers.set(
+      row,
+      `data:${imageMimeType(imagePath)};base64,${bytesToBase64(imageBytes)}`,
+    );
+  }
+  return covers;
+}
+
+async function readXlsxRows(
+  bytes: Uint8Array,
+): Promise<{ rows: string[][]; covers: Map<number, string> }> {
   const entries = readZipEntries(bytes);
   const decoder = new TextDecoder();
   const workbookName = entries.has("xl/workbook.xml")
@@ -1083,6 +1222,7 @@ async function readXlsxRows(bytes: Uint8Array): Promise<string[][]> {
   if (!sheetBytes) {
     throw new Error("xlsx 文件没有可用的工作表。");
   }
+  const sheetXml = decoder.decode(sheetBytes);
   const sharedBytes = await readZipEntry(
     bytes,
     entries,
@@ -1091,7 +1231,10 @@ async function readXlsxRows(bytes: Uint8Array): Promise<string[][]> {
   const shared = sharedBytes
     ? parseSharedStrings(decoder.decode(sharedBytes))
     : [];
-  return parseWorksheetRows(decoder.decode(sheetBytes), shared);
+  return {
+    rows: parseWorksheetRows(sheetXml, shared),
+    covers: await readEmbeddedCovers(bytes, entries, sheetPath, sheetXml),
+  };
 }
 
 function splitDelimitedLine(line: string, separator: string): string[] {
@@ -1140,10 +1283,11 @@ function parseDelimitedRows(text: string): string[][] {
 function importRows(
   rows: string[][],
   defaultMediaType?: MediaType,
+  coversByRow: Map<number, string> = new Map(),
 ): ImportReport {
   const result: ImportReport = { imported: 0, skipped: 0, errors: [], entries: [] };
   const headerRowIndex = rows.findIndex((row) =>
-    row.some((cell) => cell.trim() === "标题"),
+    row?.some((cell) => cell.trim() === "标题"),
   );
   const headerRow = rows[headerRowIndex >= 0 ? headerRowIndex : 0] ?? [];
   const headers = headerRow.map((header) => header.trim());
@@ -1210,27 +1354,31 @@ function importRows(
     const statusLabel = column("状态") || "在追";
     const status =
       statusMap[statusLabel.toLowerCase()] ?? statusMap[statusLabel] ?? "tracking";
+    const isMovie = mediaType === "movie";
     const entry: MediaEntry = {
       id: uuid(),
       title,
       mediaType,
-      currentProgress: Number(column("当前进度")) || 0,
-      totalProgress: Number(column("总进度")) || null,
+      currentProgress: isMovie ? 0 : Number(column("当前进度")) || 0,
+      totalProgress: isMovie ? null : Number(column("总进度")) || null,
       status,
-      season: normalizeSeason(column("季")),
+      season: isMovie ? null : normalizeSeason(column("季")),
       rating: Number(column("评分")) || null,
       platform: column("平台") || null,
-      coverUrl: column("封面") || null,
+      coverUrl: column("封面") || coversByRow.get(index) || null,
       overview: column("简介") || null,
       createdAt: now(),
       updatedAt: now(),
     };
-    if (
-      existing.some(
-        (item) => item.title === entry.title && item.mediaType === entry.mediaType,
-      )
-    ) {
+    const duplicate = existing.find(
+      (item) => item.title === entry.title && item.mediaType === entry.mediaType,
+    );
+    if (duplicate) {
       result.skipped += 1;
+      if (!duplicate.coverUrl && entry.coverUrl) {
+        duplicate.coverUrl = entry.coverUrl;
+        duplicate.updatedAt = now();
+      }
       continue;
     }
     existing.push(entry);
@@ -1253,13 +1401,16 @@ export async function importWebExcel(
     bytes[1] === 0x4b &&
     bytes[2] === 0x03 &&
     bytes[3] === 0x04;
-  const rows = isZip
+  const content = isZip
     ? await readXlsxRows(bytes)
-    : parseDelimitedRows(new TextDecoder().decode(bytes));
-  if (rows.length === 0) {
+    : {
+        rows: parseDelimitedRows(new TextDecoder().decode(bytes)),
+        covers: new Map<number, string>(),
+      };
+  if (content.rows.length === 0) {
     return { imported: 0, skipped: 0, errors: ["文件内容为空。"], entries: [] };
   }
-  return importRows(rows, defaultMediaType);
+  return importRows(content.rows, defaultMediaType, content.covers);
 }
 
 /**

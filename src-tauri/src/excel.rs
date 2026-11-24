@@ -344,6 +344,222 @@ pub(crate) fn parse_workbook(
     Ok(parsed)
 }
 
+/// 从工作表中提取的内嵌封面图片。
+pub(crate) struct EmbeddedCover {
+    pub bytes: Vec<u8>,
+    pub extension: String,
+}
+
+fn read_zip_text<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Option<String> {
+    use std::io::Read as _;
+    let mut file = archive.by_name(name).ok()?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    Some(content)
+}
+
+fn find_open_tags<'a>(xml: &'a str, local: &str) -> Vec<&'a str> {
+    let mut tags = Vec::new();
+    let mut offset = 0;
+    while let Some(relative) = xml[offset..].find('<') {
+        let start = offset + relative;
+        let rest = &xml[start + 1..];
+        let Some(name_end) = rest.find(|character: char| {
+            character.is_whitespace() || character == '>' || character == '/'
+        }) else {
+            break;
+        };
+        let name = &rest[..name_end];
+        if name == local || name.ends_with(&format!(":{local}")) {
+            if let Some(end) = rest.find('>') {
+                tags.push(&xml[start..start + 1 + end + 1]);
+            }
+        }
+        offset = start + 1;
+    }
+    tags
+}
+
+fn find_open_tag<'a>(xml: &'a str, local: &str) -> Option<&'a str> {
+    find_open_tags(xml, local).into_iter().next()
+}
+
+fn find_blocks<'a>(xml: &'a str, local: &str) -> Vec<&'a str> {
+    let close = format!("</{local}>");
+    let mut blocks = Vec::new();
+    let mut offset = 0;
+    while let Some(relative) = xml[offset..].find('<') {
+        let start = offset + relative;
+        let rest = &xml[start + 1..];
+        let Some(name_end) = rest.find(|character: char| {
+            character.is_whitespace() || character == '>' || character == '/'
+        }) else {
+            break;
+        };
+        let name = &rest[..name_end];
+        if name == local || name.ends_with(&format!(":{local}")) {
+            let after = &xml[start..];
+            if let Some(end) = after.find(&close) {
+                blocks.push(&after[..end + close.len()]);
+                offset = start + end + close.len();
+                continue;
+            }
+        }
+        offset = start + 1;
+    }
+    blocks
+}
+
+fn element_text<'a>(xml: &'a str, local: &str) -> Option<&'a str> {
+    let open = find_open_tag(xml, local)?;
+    let start = xml.find(open)? + open.len();
+    let close = format!("</{local}>");
+    let end = xml[start..].find(&close)? + start;
+    Some(&xml[start..end])
+}
+
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let pattern = format!("{name}=\"");
+    let start = tag.find(&pattern)? + pattern.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
+}
+
+fn resolve_zip_target(base_directory: &str, target: &str) -> String {
+    if let Some(stripped) = target.strip_prefix('/') {
+        return stripped.to_owned();
+    }
+    let mut segments: Vec<&str> = base_directory
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            value => segments.push(value),
+        }
+    }
+    segments.join("/")
+}
+
+fn directory_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(directory, _)| directory)
+}
+
+fn file_name_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(_, name)| name)
+}
+
+fn extract_covers_inner(bytes: &[u8]) -> Option<std::collections::HashMap<usize, EmbeddedCover>> {
+    use std::io::Read as _;
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    let names: Vec<String> = archive.file_names().map(str::to_owned).collect();
+    let sheet_name = if names.iter().any(|name| name == "xl/worksheets/sheet1.xml") {
+        "xl/worksheets/sheet1.xml".to_owned()
+    } else {
+        names
+            .iter()
+            .find(|name| {
+                name.starts_with("xl/worksheets/")
+                    && name.ends_with(".xml")
+                    && !name.contains("/_rels/")
+            })?
+            .clone()
+    };
+
+    let sheet_xml = read_zip_text(&mut archive, &sheet_name)?;
+    let drawing_id = attribute(find_open_tag(&sheet_xml, "drawing")?, "r:id")?.to_owned();
+    let sheet_directory = directory_of(&sheet_name);
+    let sheet_rels = read_zip_text(
+        &mut archive,
+        &format!("{sheet_directory}/_rels/{}.rels", file_name_of(&sheet_name)),
+    )?;
+    let drawing_target = find_open_tags(&sheet_rels, "Relationship")
+        .into_iter()
+        .find(|relation| attribute(relation, "Id") == Some(drawing_id.as_str()))
+        .and_then(|relation| attribute(relation, "Target"))?;
+    let drawing_path = resolve_zip_target(sheet_directory, drawing_target);
+    let drawing_xml = read_zip_text(&mut archive, &drawing_path)?
+        .replace("xdr:", "")
+        .replace("a:", "");
+    let drawing_directory = directory_of(&drawing_path);
+    let drawing_rels = read_zip_text(
+        &mut archive,
+        &format!(
+            "{drawing_directory}/_rels/{}.rels",
+            file_name_of(&drawing_path)
+        ),
+    )?;
+    let relationships = find_open_tags(&drawing_rels, "Relationship");
+
+    let mut covers = std::collections::HashMap::new();
+    for anchor in find_blocks(&drawing_xml, "oneCellAnchor")
+        .into_iter()
+        .chain(find_blocks(&drawing_xml, "twoCellAnchor"))
+    {
+        let Some(from) = element_text(anchor, "from") else {
+            continue;
+        };
+        let Some(column) =
+            element_text(from, "col").and_then(|value| value.trim().parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some(row) =
+            element_text(from, "row").and_then(|value| value.trim().parse::<usize>().ok())
+        else {
+            continue;
+        };
+        if column != 8 {
+            continue;
+        }
+        let Some(embed_id) =
+            find_open_tag(anchor, "blip").and_then(|blip| attribute(blip, "r:embed"))
+        else {
+            continue;
+        };
+        let Some(image_target) = relationships
+            .iter()
+            .find(|relation| attribute(relation, "Id") == Some(embed_id))
+            .and_then(|relation| attribute(relation, "Target"))
+        else {
+            continue;
+        };
+        let image_path = resolve_zip_target(drawing_directory, image_target);
+        let extension = image_path
+            .rsplit_once('.')
+            .map_or("jpg", |(_, extension)| extension)
+            .to_ascii_lowercase();
+        let Ok(mut file) = archive.by_name(&image_path) else {
+            continue;
+        };
+        let mut image_bytes = Vec::new();
+        if file.read_to_end(&mut image_bytes).is_err() || image_bytes.is_empty() {
+            continue;
+        }
+        covers.insert(
+            row + 1,
+            EmbeddedCover {
+                bytes: image_bytes,
+                extension,
+            },
+        );
+    }
+    Some(covers)
+}
+
+/// 尽力提取工作表中嵌入的封面；失败时返回空表，不影响普通导入。
+pub(crate) fn extract_covers(bytes: &[u8]) -> std::collections::HashMap<usize, EmbeddedCover> {
+    extract_covers_inner(bytes).unwrap_or_default()
+}
+
 fn parse_row(
     row: &[Data],
     column_map: &[Option<Column>],
@@ -555,5 +771,48 @@ mod tests {
         // 模板第一行是表头，第二行是示例，应能解析出示例条目。
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].1.as_ref().unwrap().title, "庆余年");
+    }
+
+    #[test]
+    fn extracts_embedded_covers_from_drawing() {
+        use std::io::Write as _;
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut archive = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            let files = [
+                (
+                    "xl/worksheets/sheet1.xml",
+                    r#"<worksheet><drawing r:id="rId1"/></worksheet>"#,
+                ),
+                (
+                    "xl/worksheets/_rels/sheet1.xml.rels",
+                    r#"<Relationships><Relationship Id="rId1" Target="/xl/drawings/drawing1.xml"/></Relationships>"#,
+                ),
+                (
+                    "xl/drawings/drawing1.xml",
+                    r#"<wsDr><oneCellAnchor><from><col>8</col><row>1</row></from><pic><blipFill><a:blip r:embed="rId1"/></blipFill></pic></oneCellAnchor></wsDr>"#,
+                ),
+                (
+                    "xl/drawings/_rels/drawing1.xml.rels",
+                    r#"<Relationships><Relationship Id="rId1" Target="/xl/media/image1.png"/></Relationships>"#,
+                ),
+            ];
+            for (name, content) in files {
+                archive.start_file(name, options).unwrap();
+                archive.write_all(content.as_bytes()).unwrap();
+            }
+            archive.start_file("xl/media/image1.png", options).unwrap();
+            archive.write_all(b"\x89PNG\r\n\x1a\n").unwrap();
+            archive.finish().unwrap();
+        }
+
+        let covers = extract_covers(buffer.get_ref());
+        assert_eq!(covers.len(), 1);
+        let cover = &covers[&2];
+        assert_eq!(cover.extension, "png");
+        assert_eq!(cover.bytes, b"\x89PNG\r\n\x1a\n");
     }
 }

@@ -27,11 +27,13 @@ fn create_entry(database: State<'_, Database>, input: EntryInput) -> Result<Medi
 
 #[tauri::command]
 fn import_excel(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     data: String,
     default_media_type: Option<MediaType>,
 ) -> Result<ImportReport, String> {
-    database.import_excel(&data, default_media_type)
+    let covers_directory = cover::covers_directory(&app)?;
+    database.import_excel_with_covers(&data, default_media_type, Some(&covers_directory))
 }
 
 #[tauri::command]

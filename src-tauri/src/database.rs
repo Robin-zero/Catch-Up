@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::settings::{normalize_library_view, normalize_theme, AppSettings};
 
-const DATABASE_VERSION: u32 = 7;
+const DATABASE_VERSION: u32 = 8;
 const TRASH_RETENTION_DAYS: i64 = 30;
 const ENTRY_COLUMNS: &str = "
     id, title, media_type, current_progress, total_progress, status,
@@ -57,7 +57,13 @@ const ENTRIES_V2_DEFINITION: &str = "
         OR (
             typeof(cover_url) = 'text'
             AND length(cover_url) <= 500
-            AND (cover_url LIKE 'http://%' OR cover_url LIKE 'https://%')
+            AND (
+                cover_url LIKE 'http://%'
+                OR cover_url LIKE 'https://%'
+                OR cover_url LIKE 'data:image/%'
+                OR cover_url LIKE '/%'
+                OR cover_url LIKE '_:%'
+            )
         )
     ),
     overview TEXT CHECK (
@@ -234,20 +240,25 @@ impl EntryInput {
         if title.is_empty() {
             return Err("标题不能为空".to_owned());
         }
-        if self.current_progress < 0 {
-            return Err("当前进度不能为负数".to_owned());
-        }
-        if self.total_progress.is_some_and(|total| total <= 0) {
-            return Err("总进度必须为空或正整数".to_owned());
-        }
-        if self
-            .total_progress
-            .is_some_and(|total| self.current_progress > total)
-        {
-            return Err("当前进度不能超过总进度".to_owned());
+        let is_movie = self.media_type == MediaType::Movie;
+        if !is_movie {
+            if self.current_progress < 0 {
+                return Err("当前进度不能为负数".to_owned());
+            }
+            if self.total_progress.is_some_and(|total| total <= 0) {
+                return Err("总进度必须为空或正整数".to_owned());
+            }
+            if self
+                .total_progress
+                .is_some_and(|total| self.current_progress > total)
+            {
+                return Err("当前进度不能超过总进度".to_owned());
+            }
         }
 
-        let status = if self.status == EntryStatus::Dropped || self.status == EntryStatus::ToWatch {
+        let status = if is_movie {
+            self.status
+        } else if self.status == EntryStatus::Dropped || self.status == EntryStatus::ToWatch {
             self.status
         } else if self.total_progress == Some(self.current_progress) {
             EntryStatus::Completed
@@ -258,10 +269,14 @@ impl EntryInput {
         Ok(ValidatedInput {
             title,
             media_type: self.media_type,
-            current_progress: self.current_progress,
-            total_progress: self.total_progress,
+            current_progress: if is_movie { 0 } else { self.current_progress },
+            total_progress: if is_movie { None } else { self.total_progress },
             status,
-            season: optional_trimmed(self.season, "季", 20)?,
+            season: if is_movie {
+                None
+            } else {
+                optional_trimmed(self.season, "季", 20)?
+            },
             rating: validate_rating(self.rating)?,
             platform: optional_trimmed(self.platform, "平台", 60)?,
             cover_url: validate_cover_url(self.cover_url)?,
@@ -286,8 +301,14 @@ fn validate_cover_url(cover_url: Option<String>) -> Result<Option<String>, Strin
     let trimmed = optional_trimmed(cover_url, "封面地址", 500)?;
     if let Some(url) = &trimmed {
         let lower = url.to_ascii_lowercase();
-        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-            return Err("封面地址仅支持 http 或 https 链接".to_owned());
+        let is_http = lower.starts_with("http://") || lower.starts_with("https://");
+        let is_data_image = lower.starts_with("data:image/");
+        let is_local = url.starts_with('/')
+            || (url.len() > 2
+                && url.as_bytes()[1] == b':'
+                && (url.as_bytes()[2] == b'\\' || url.as_bytes()[2] == b'/'));
+        if !(is_http || is_data_image || is_local) {
+            return Err("封面地址仅支持 http(s) 链接、本地图片或内嵌图片".to_owned());
         }
     }
     Ok(trimmed)
@@ -571,6 +592,37 @@ impl Database {
                     ",
                 )
                 .map_err(|error| format!("无法升级数据库表：{error}"))?;
+        } else if !entries_cover_allows_local(&transaction)
+            .map_err(|error| format!("无法检查数据库表结构：{error}"))?
+        {
+            // v7 → v8：封面允许本地图片路径与内嵌图片，支持导入 Excel 内嵌封面。
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS entries_v8;")
+                .map_err(|error| format!("无法清理旧迁移表：{error}"))?;
+            transaction
+                .execute_batch(&format!(
+                    "CREATE TABLE entries_v8 ({ENTRIES_V2_DEFINITION});"
+                ))
+                .map_err(|error| format!("无法创建新版数据库表：{error}"))?;
+            transaction
+                .execute_batch(
+                    "
+                    INSERT INTO entries_v8 (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    )
+                    SELECT
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview,
+                        created_at, updated_at, deleted_at
+                    FROM entries;
+
+                    DROP TABLE entries;
+                    ALTER TABLE entries_v8 RENAME TO entries;
+                    ",
+                )
+                .map_err(|error| format!("无法升级数据库表：{error}"))?;
         }
 
         transaction
@@ -686,15 +738,42 @@ impl Database {
         base64_data: &str,
         default_media_type: Option<MediaType>,
     ) -> Result<ImportReport, String> {
+        self.import_excel_with_covers(base64_data, default_media_type, None)
+    }
+
+    pub fn import_excel_with_covers(
+        &self,
+        base64_data: &str,
+        default_media_type: Option<MediaType>,
+        covers_directory: Option<&Path>,
+    ) -> Result<ImportReport, String> {
         let bytes = crate::excel::decode_base64(base64_data)?;
         let default_media_type = default_media_type.unwrap_or(MediaType::Drama);
         let rows = crate::excel::parse_workbook(&bytes, default_media_type)?;
+        let covers = if covers_directory.is_some() {
+            crate::excel::extract_covers(&bytes)
+        } else {
+            HashMap::new()
+        };
 
         let mut candidates = Vec::new();
         let mut errors = Vec::new();
         let mut skipped = 0u32;
         for (line_number, parsed) in rows {
-            match parsed.and_then(|input| input.validate()) {
+            match parsed.and_then(|mut input| {
+                if input.cover_url.is_none() {
+                    if let (Some(directory), Some(cover)) =
+                        (covers_directory, covers.get(&line_number))
+                    {
+                        if let Ok(path) =
+                            crate::cover::write_cover_to(directory, &cover.bytes, &cover.extension)
+                        {
+                            input.cover_url = Some(path);
+                        }
+                    }
+                }
+                input.validate()
+            }) {
                 Ok(validated) => candidates.push((line_number, validated)),
                 Err(error) => {
                     skipped += 1;
@@ -742,6 +821,17 @@ impl Database {
             )
             .map_err(|error| format!("检查重复条目失败：{error}"))?
             {
+                if let Some(cover_url) = input.cover_url.as_deref() {
+                    backfill_missing_cover(
+                        &transaction,
+                        &input.title,
+                        input.media_type,
+                        input.season.as_deref(),
+                        cover_url,
+                        &timestamp(),
+                    )
+                    .map_err(|error| format!("更新已有条目封面失败：{error}"))?;
+                }
                 skipped += 1;
                 errors.push(format!(
                     "第 {line_number} 行：已存在同名、同类型与季的条目，已跳过"
@@ -1167,11 +1257,7 @@ impl Database {
         } else {
             "false"
         };
-        let ai_enabled = if settings.ai_enabled {
-            "true"
-        } else {
-            "false"
-        };
+        let ai_enabled = if settings.ai_enabled { "true" } else { "false" };
         let last_synced_at = settings.last_synced_at.as_deref().unwrap_or("");
         let entries = [
             ("tmdb_api_key", settings.tmdb_api_key.as_str()),
@@ -1268,6 +1354,25 @@ fn entry_exists(
     )
 }
 
+/// 重复导入时，为已有条目补齐缺失的封面。
+fn backfill_missing_cover(
+    connection: &Connection,
+    title: &str,
+    media_type: MediaType,
+    season: Option<&str>,
+    cover_url: &str,
+    updated_at: &str,
+) -> rusqlite::Result<usize> {
+    connection.execute(
+        "
+        UPDATE entries SET cover_url = ?1, updated_at = ?2
+        WHERE deleted_at IS NULL AND title = ?3 AND media_type = ?4 AND season IS ?5
+          AND (cover_url IS NULL OR trim(cover_url) = '')
+        ",
+        params![cover_url, updated_at, title, media_type.as_str(), season],
+    )
+}
+
 fn table_exists(connection: &Connection, name: &str) -> rusqlite::Result<bool> {
     connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
@@ -1313,6 +1418,17 @@ fn entries_media_type_allows_novel(connection: &Connection) -> rusqlite::Result<
         )
         .optional()?;
     Ok(definition.is_some_and(|text| text.contains("'novel'")))
+}
+
+fn entries_cover_allows_local(connection: &Connection) -> rusqlite::Result<bool> {
+    let definition: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(definition.is_some_and(|text| text.contains("data:image/%")))
 }
 
 fn query_entries(
@@ -2348,7 +2464,7 @@ mod tests {
                 cover_url: Some("ftp://example.com/a.png".to_owned()),
                 ..input("非法封面")
             }),
-            "封面地址仅支持 http 或 https 链接",
+            "封面地址仅支持",
         );
         assert_error(
             database.create_entry(EntryInput {
@@ -2756,7 +2872,8 @@ mod tests {
         assert_eq!(drama.rating, Some(9.4));
         let movie = &report.entries[1];
         assert_eq!(movie.media_type, MediaType::Movie);
-        assert_eq!(movie.current_progress, 1);
+        assert_eq!(movie.current_progress, 0);
+        assert_eq!(movie.total_progress, None);
     }
 
     #[test]
@@ -3244,6 +3361,92 @@ mod tests {
             })
             .unwrap();
         assert_eq!(custom.season.as_deref(), Some("年番"));
+
+        let version: u32 = database
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+    }
+
+    #[test]
+    fn local_cover_paths_are_persisted() {
+        let (_directory, database) = test_database();
+        let entry = database
+            .create_entry(EntryInput {
+                cover_url: Some(r"C:\Users\demo\covers\cover-1.jpg".to_owned()),
+                ..input("本地封面")
+            })
+            .unwrap();
+        assert_eq!(
+            entry.cover_url.as_deref(),
+            Some(r"C:\Users\demo\covers\cover-1.jpg")
+        );
+    }
+
+    #[test]
+    fn v7_database_upgrades_cover_url_to_allow_local_paths() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("catchup.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE entries (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        title TEXT NOT NULL,
+                        media_type TEXT NOT NULL,
+                        current_progress INTEGER NOT NULL,
+                        total_progress INTEGER,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('tracking','completed','dropped','to_watch')
+                        ),
+                        season TEXT,
+                        rating REAL,
+                        platform TEXT,
+                        cover_url TEXT CHECK (
+                            cover_url IS NULL
+                            OR length(cover_url) <= 500
+                            AND (cover_url LIKE 'http://%' OR cover_url LIKE 'https://%')
+                        ),
+                        overview TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        deleted_at TEXT
+                    );
+                    PRAGMA user_version = 7;
+                    ",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO entries (
+                        id, title, media_type, current_progress, total_progress, status,
+                        season, rating, platform, cover_url, overview, created_at, updated_at,
+                        deleted_at
+                    ) VALUES (?1, ?2, 'drama', 1, 12, 'tracking', NULL, NULL, NULL,
+                        NULL, NULL, ?3, ?3, NULL)
+                    ",
+                    params!["v7-entry", "旧版 v7 条目", "2024-01-01T00:00:00.000000000Z"],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.list_entries().unwrap()[0].id, "v7-entry");
+        let entry = database
+            .create_entry(EntryInput {
+                cover_url: Some(r"C:\Users\demo\covers\cover-1.jpg".to_owned()),
+                ..input("升级后本地封面")
+            })
+            .unwrap();
+        assert_eq!(
+            entry.cover_url.as_deref(),
+            Some(r"C:\Users\demo\covers\cover-1.jpg")
+        );
 
         let version: u32 = database
             .lock()

@@ -630,6 +630,7 @@ function EntryFormDialog({
   const coverUrlRef = useRef<HTMLInputElement>(null);
   const overviewRef = useRef<HTMLTextAreaElement>(null);
   const unit = MEDIA_TYPE_UNITS[values.mediaType];
+  const isMovie = values.mediaType === "movie";
   const titleId = "entry-form-title";
 
   function changeField<Field extends keyof EntryFormValues>(
@@ -828,30 +829,32 @@ function EntryFormDialog({
     if (!title) {
       nextErrors.title = "请输入标题。";
     }
-    if (
-      !/^\d+$/.test(currentProgressText) ||
-      !Number.isSafeInteger(currentProgress)
-    ) {
-      nextErrors.currentProgress = "当前进度必须是非负整数。";
-    }
-    if (
-      totalProgress !== null &&
-      (!/^\d+$/.test(totalProgressText) ||
-        !Number.isSafeInteger(totalProgress) ||
-        totalProgress <= 0)
-    ) {
-      nextErrors.totalProgress = "总进度必须为空或正整数。";
-    }
-    if (
-      !nextErrors.currentProgress &&
-      !nextErrors.totalProgress &&
-      totalProgress !== null &&
-      currentProgress > totalProgress
-    ) {
-      nextErrors.currentProgress = "当前进度不能大于总进度。";
-    }
-    if (seasonText.length > 20) {
-      nextErrors.season = "季不能超过 20 个字符。";
+    if (!isMovie) {
+      if (
+        !/^\d+$/.test(currentProgressText) ||
+        !Number.isSafeInteger(currentProgress)
+      ) {
+        nextErrors.currentProgress = "当前进度必须是非负整数。";
+      }
+      if (
+        totalProgress !== null &&
+        (!/^\d+$/.test(totalProgressText) ||
+          !Number.isSafeInteger(totalProgress) ||
+          totalProgress <= 0)
+      ) {
+        nextErrors.totalProgress = "总进度必须为空或正整数。";
+      }
+      if (
+        !nextErrors.currentProgress &&
+        !nextErrors.totalProgress &&
+        totalProgress !== null &&
+        currentProgress > totalProgress
+      ) {
+        nextErrors.currentProgress = "当前进度不能大于总进度。";
+      }
+      if (seasonText.length > 20) {
+        nextErrors.season = "季不能超过 20 个字符。";
+      }
     }
     if (
       ratingText &&
@@ -862,6 +865,7 @@ function EntryFormDialog({
     if (
       coverUrl &&
       !/^https?:\/\//i.test(coverUrl) &&
+      !coverUrl.startsWith("data:image/") &&
       !/^[a-zA-Z]:[\\/]/.test(coverUrl) &&
       !coverUrl.startsWith("/")
     ) {
@@ -914,10 +918,10 @@ function EntryFormDialog({
     const input: EntryInput = {
       title,
       mediaType: values.mediaType,
-      currentProgress,
-      totalProgress,
+      currentProgress: isMovie ? 0 : currentProgress,
+      totalProgress: isMovie ? null : totalProgress,
       status: values.status,
-      season: seasonText || null,
+      season: isMovie ? null : seasonText || null,
       rating: ratingText ? Number(ratingText) : null,
       platform: platform || null,
       coverUrl: storedCoverUrl || null,
@@ -1029,10 +1033,6 @@ function EntryFormDialog({
                   setValues((current) => ({
                     ...current,
                     mediaType,
-                    totalProgress:
-                      mediaType === "movie" && !current.totalProgress.trim()
-                        ? "1"
-                        : current.totalProgress,
                   }));
                   setErrors((current) => ({
                     ...current,
@@ -1050,69 +1050,71 @@ function EntryFormDialog({
               </select>
             </div>
 
-            <div className="entry-form__progress-row">
-              <div className="form-field">
-                <label htmlFor="entry-current-progress">
-                  当前进度（{unit}）
-                </label>
-                <input
-                  id="entry-current-progress"
-                  name="currentProgress"
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  step="1"
-                  value={values.currentProgress}
-                  required
-                  aria-invalid={errors.currentProgress ? true : undefined}
-                  aria-describedby={
-                    errors.currentProgress
-                      ? "entry-current-progress-error"
-                      : undefined
-                  }
-                  ref={currentProgressRef}
-                  onChange={(event) =>
-                    changeField("currentProgress", event.target.value)
-                  }
-                />
-                {errors.currentProgress ? (
-                  <p className="field-error" id="entry-current-progress-error">
-                    {errors.currentProgress}
-                  </p>
-                ) : null}
-              </div>
+            {!isMovie ? (
+              <div className="entry-form__progress-row">
+                <div className="form-field">
+                  <label htmlFor="entry-current-progress">
+                    当前进度（{unit}）
+                  </label>
+                  <input
+                    id="entry-current-progress"
+                    name="currentProgress"
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    step="1"
+                    value={values.currentProgress}
+                    required
+                    aria-invalid={errors.currentProgress ? true : undefined}
+                    aria-describedby={
+                      errors.currentProgress
+                        ? "entry-current-progress-error"
+                        : undefined
+                    }
+                    ref={currentProgressRef}
+                    onChange={(event) =>
+                      changeField("currentProgress", event.target.value)
+                    }
+                  />
+                  {errors.currentProgress ? (
+                    <p className="field-error" id="entry-current-progress-error">
+                      {errors.currentProgress}
+                    </p>
+                  ) : null}
+                </div>
 
-              <div className="form-field">
-                <label htmlFor="entry-total-progress">
-                  总进度（{unit}，选填）
-                </label>
-                <input
-                  id="entry-total-progress"
-                  name="totalProgress"
-                  type="number"
-                  inputMode="numeric"
-                  min="1"
-                  step="1"
-                  value={values.totalProgress}
-                  aria-invalid={errors.totalProgress ? true : undefined}
-                  aria-describedby={`entry-total-progress-hint${
-                    errors.totalProgress ? " entry-total-progress-error" : ""
-                  }`}
-                  ref={totalProgressRef}
-                  onChange={(event) =>
-                    changeField("totalProgress", event.target.value)
-                  }
-                />
-                <p className="field-hint" id="entry-total-progress-hint">
-                  留空表示总进度未知
-                </p>
-                {errors.totalProgress ? (
-                  <p className="field-error" id="entry-total-progress-error">
-                    {errors.totalProgress}
+                <div className="form-field">
+                  <label htmlFor="entry-total-progress">
+                    总进度（{unit}，选填）
+                  </label>
+                  <input
+                    id="entry-total-progress"
+                    name="totalProgress"
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    step="1"
+                    value={values.totalProgress}
+                    aria-invalid={errors.totalProgress ? true : undefined}
+                    aria-describedby={`entry-total-progress-hint${
+                      errors.totalProgress ? " entry-total-progress-error" : ""
+                    }`}
+                    ref={totalProgressRef}
+                    onChange={(event) =>
+                      changeField("totalProgress", event.target.value)
+                    }
+                  />
+                  <p className="field-hint" id="entry-total-progress-hint">
+                    留空表示总进度未知
                   </p>
-                ) : null}
+                  {errors.totalProgress ? (
+                    <p className="field-error" id="entry-total-progress-error">
+                      {errors.totalProgress}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="form-field">
               <label htmlFor="entry-status">状态</label>
@@ -1136,32 +1138,34 @@ function EntryFormDialog({
             </div>
 
             <div className="entry-form__progress-row">
-              <div className="form-field">
-                <label htmlFor="entry-season">季</label>
-                <input
-                  id="entry-season"
-                  name="season"
-                  type="text"
-                  maxLength={20}
-                  placeholder="如 1、年番"
-                  value={values.season}
-                  aria-invalid={errors.season ? true : undefined}
-                  aria-describedby={
-                    errors.season ? "entry-season-error" : undefined
-                  }
-                  ref={seasonRef}
-                  onChange={(event) =>
-                    changeField("season", event.target.value)
-                  }
-                />
-                {errors.season ? (
-                  <p className="field-error" id="entry-season-error">
-                    {errors.season}
-                  </p>
-                ) : (
-                  <p className="field-hint">选填，可填数字或自定义文本</p>
-                )}
-              </div>
+              {!isMovie ? (
+                <div className="form-field">
+                  <label htmlFor="entry-season">季</label>
+                  <input
+                    id="entry-season"
+                    name="season"
+                    type="text"
+                    maxLength={20}
+                    placeholder="如 1、年番"
+                    value={values.season}
+                    aria-invalid={errors.season ? true : undefined}
+                    aria-describedby={
+                      errors.season ? "entry-season-error" : undefined
+                    }
+                    ref={seasonRef}
+                    onChange={(event) =>
+                      changeField("season", event.target.value)
+                    }
+                  />
+                  {errors.season ? (
+                    <p className="field-error" id="entry-season-error">
+                      {errors.season}
+                    </p>
+                  ) : (
+                    <p className="field-hint">选填，可填数字或自定义文本</p>
+                  )}
+                </div>
+              ) : null}
 
               <div className="form-field">
                 <label htmlFor="entry-platform">平台</label>
@@ -2711,6 +2715,7 @@ function EntryRow({
   trashActions?: { onRestore: () => void; onPurge: () => void };
 }) {
   const percentage = getProgressPercentage(entry);
+  const isMovie = entry.mediaType === "movie";
   const titleId = `entry-title-${entry.id}`;
   const decrementDisabled = pending || entry.currentProgress === 0;
   const incrementDisabled =
@@ -2747,7 +2752,9 @@ function EntryRow({
             <span className="entry__type-label">
               {MEDIA_TYPE_LABELS[entry.mediaType]}
             </span>
-            {entry.season !== null && entry.season !== undefined ? (
+            {!isMovie &&
+            entry.season !== null &&
+            entry.season !== undefined ? (
               <>
                 <span className="entry__dot" aria-hidden="true">·</span>
                 <span className="entry__season">
@@ -2786,26 +2793,30 @@ function EntryRow({
           ) : null}
         </div>
 
-        <div className="entry__progress">
-          <span className="entry__progress-value">{formatProgress(entry)}</span>
-          {percentage === null ? (
-            <span className="entry__unknown">总进度未知</span>
-          ) : (
-            <div className="entry__bar-row">
-              <div
-                className="entry__bar"
-                role="progressbar"
-                aria-label={`${entry.title}的观看或阅读进度`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percentage}
-              >
-                <span style={{ width: `${percentage}%` }} />
+        {!isMovie ? (
+          <div className="entry__progress">
+            <span className="entry__progress-value">
+              {formatProgress(entry)}
+            </span>
+            {percentage === null ? (
+              <span className="entry__unknown">总进度未知</span>
+            ) : (
+              <div className="entry__bar-row">
+                <div
+                  className="entry__bar"
+                  role="progressbar"
+                  aria-label={`${entry.title}的观看或阅读进度`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percentage}
+                >
+                  <span style={{ width: `${percentage}%` }} />
+                </div>
+                <span className="entry__percentage">{percentage}%</span>
               </div>
-              <span className="entry__percentage">{percentage}%</span>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        ) : null}
 
         <div className="entry__actions">
           {trashActions ? (
@@ -2831,30 +2842,32 @@ function EntryRow({
             </div>
           ) : (
             <>
-              <div
-                className="stepper"
-                role="group"
-                aria-label={`${entry.title}的快捷操作`}
-              >
-                <button
-                  className="stepper__button"
-                  type="button"
-                  aria-label={`《${entry.title}》进度减一`}
-                  disabled={decrementDisabled}
-                  onClick={() => onWrite?.({ type: "progress", delta: -1 })}
+              {!isMovie ? (
+                <div
+                  className="stepper"
+                  role="group"
+                  aria-label={`${entry.title}的快捷操作`}
                 >
-                  −
-                </button>
-                <button
-                  className="stepper__button"
-                  type="button"
-                  aria-label={`《${entry.title}》进度加一`}
-                  disabled={incrementDisabled}
-                  onClick={() => onWrite?.({ type: "progress", delta: 1 })}
-                >
-                  +
-                </button>
-              </div>
+                  <button
+                    className="stepper__button"
+                    type="button"
+                    aria-label={`《${entry.title}》进度减一`}
+                    disabled={decrementDisabled}
+                    onClick={() => onWrite?.({ type: "progress", delta: -1 })}
+                  >
+                    −
+                  </button>
+                  <button
+                    className="stepper__button"
+                    type="button"
+                    aria-label={`《${entry.title}》进度加一`}
+                    disabled={incrementDisabled}
+                    onClick={() => onWrite?.({ type: "progress", delta: 1 })}
+                  >
+                    +
+                  </button>
+                </div>
+              ) : null}
               <button
                 className="ghost-button"
                 type="button"

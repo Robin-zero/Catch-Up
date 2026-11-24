@@ -591,6 +591,10 @@ function EntryFormDialog({
   const [scrapeNotice, setScrapeNotice] = useState<string | null>(null);
   const [importingCover, setImportingCover] = useState(false);
   const savingRef = useRef(false);
+  const coverCacheRef = useRef<{
+    url: string;
+    promise: Promise<string>;
+  } | null>(null);
   const coverFileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const currentProgressRef = useRef<HTMLInputElement>(null);
@@ -645,7 +649,9 @@ function EntryFormDialog({
 
     // 刮削封面下载到本地缓存，后续直接从本地读取。
     if (posterUrl) {
-      void cacheCoverFromUrl(posterUrl)
+      const promise = cacheCoverFromUrl(posterUrl);
+      coverCacheRef.current = { url: posterUrl, promise };
+      void promise
         .then((localPath) => {
           if (typeof localPath !== "string" || !localPath) {
             return;
@@ -827,6 +833,22 @@ function EntryFormDialog({
     savingRef.current = true;
     setSaving(true);
     setErrors({});
+
+    // 保存前确保远程封面已落地到本地，避免 WebDAV 同步依赖外部图床。
+    let storedCoverUrl = coverUrl;
+    if (/^https?:\/\//i.test(coverUrl)) {
+      try {
+        const pending = coverCacheRef.current;
+        storedCoverUrl =
+          pending && pending.url === coverUrl
+            ? await pending.promise
+            : await cacheCoverFromUrl(coverUrl);
+      } catch {
+        // 下载失败时保留远程链接，避免阻断保存。
+        storedCoverUrl = coverUrl;
+      }
+    }
+
     const input: EntryInput = {
       title,
       mediaType: values.mediaType,
@@ -836,7 +858,7 @@ function EntryFormDialog({
       season: seasonText || null,
       rating: ratingText ? Number(ratingText) : null,
       platform: platform || null,
-      coverUrl: coverUrl || null,
+      coverUrl: storedCoverUrl || null,
       overview: overview || null,
     };
 

@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setSystemPrefersDark } from "./test/setup";
 import {
   adjustProgress,
+  cacheCoverFromUrl,
   createEntry,
   deleteEntry,
   downloadExcelTemplate,
@@ -82,6 +83,7 @@ const mockedGetSettings = vi.mocked(getSettings);
 const mockedSaveSettings = vi.mocked(saveSettings);
 const mockedSaveCoverImage = vi.mocked(saveCoverImage);
 const mockedSearchTmdb = vi.mocked(searchTmdb);
+const mockedCacheCoverFromUrl = vi.mocked(cacheCoverFromUrl);
 const mockedSmartScrape = vi.mocked(smartScrape);
 const mockedSyncNow = vi.mocked(syncNow);
 
@@ -135,6 +137,8 @@ beforeEach(() => {
   mockedGetSettings.mockReset();
   mockedGetSettings.mockResolvedValue({ ...DEFAULT_SETTINGS });
   mockedSaveSettings.mockReset();
+  mockedCacheCoverFromUrl.mockReset();
+  mockedCacheCoverFromUrl.mockImplementation(async (url: string) => url);
   mockedSearchTmdb.mockReset();
   mockedSmartScrape.mockReset();
   mockedSyncNow.mockReset();
@@ -950,6 +954,34 @@ describe("条目管理", () => {
     expect(summary).toHaveTextContent("条目总数2项");
     expect(summary).toHaveTextContent("正在追更1项在追");
     expect(summary).toHaveTextContent("已经看完1项完成");
+  });
+
+  it("保存时先把远程封面缓存到本地", async () => {
+    const user = userEvent.setup();
+    const created = makeEntry({ title: "带封面的条目" });
+    mockedListEntries.mockResolvedValue([]);
+    mockedCreateEntry.mockResolvedValue(created);
+    mockedCacheCoverFromUrl.mockResolvedValue("C:\\data\\covers\\cover-1.jpg");
+    render(<App />);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+
+    await user.click(screen.getByRole("button", { name: "添加条目" }));
+    const dialog = screen.getByRole("dialog", { name: "添加条目" });
+    await user.type(within(dialog).getByLabelText("标题"), "带封面的条目");
+    fireEvent.change(within(dialog).getByLabelText("封面"), {
+      target: { value: "https://example.com/poster.jpg" },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "添加条目" }));
+
+    await waitFor(() => expect(mockedCreateEntry).toHaveBeenCalledTimes(1));
+    expect(mockedCacheCoverFromUrl).toHaveBeenCalledWith(
+      "https://example.com/poster.jpg",
+    );
+    expect(mockedCreateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        coverUrl: "C:\\data\\covers\\cover-1.jpg",
+      }),
+    );
   });
 
   it("编辑时回填全部字段，成功后按 updatedAt 重排并同步摘要", async () => {

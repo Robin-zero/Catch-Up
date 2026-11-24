@@ -627,6 +627,10 @@ svg {
   white-space: nowrap;
 }
 
+.filter-reset {
+  flex: none;
+}
+
 .compact-select {
   height: 26px;
   max-width: 118px;
@@ -737,12 +741,6 @@ svg {
 .sync-chip__label {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.topbar__trash-button,
-.topbar__import-button,
-.topbar__settings-button {
-  display: none;
 }
 
 /* ---------- Buttons ---------- */
@@ -2296,9 +2294,13 @@ kbd {
   }
 
   .topbar {
-    grid-template-columns: minmax(120px, 1fr) minmax(140px, 230px) auto auto;
+    grid-template-columns: max-content minmax(140px, 230px) minmax(0, 1fr) auto;
     grid-template-areas: "title search filters add";
     padding: 9px 14px;
+  }
+
+  .filter-row {
+    justify-content: flex-end;
   }
 
   .add-button {
@@ -2367,26 +2369,9 @@ kbd {
     height: 18px;
   }
 
-  .topbar__trash-button,
-  .topbar__import-button,
-  .topbar__settings-button {
-    display: inline-flex;
-    width: 34px;
-    height: 34px;
-    border-radius: 8px;
-    background: var(--surface-muted);
-  }
-
   .topbar__sync-chip {
     display: inline-flex;
     flex: none;
-  }
-
-  .topbar__trash-button svg,
-  .topbar__import-button svg,
-  .topbar__settings-button svg {
-    width: 18px;
-    height: 18px;
   }
 
   .dialog--settings {

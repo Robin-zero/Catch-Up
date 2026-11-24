@@ -754,6 +754,39 @@ describe("搜索与筛选", () => {
     ).toBeNull();
   });
 
+  it("支持按更新时间、标题和评分排序", async () => {
+    const user = userEvent.setup();
+    const older = makeEntry({
+      id: "sort-alpha",
+      title: "阿尔法",
+      rating: 9,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const newer = makeEntry({
+      id: "sort-beta",
+      title: "贝塔",
+      rating: 6,
+      createdAt: "2026-02-01T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+    });
+    mockedListEntries.mockResolvedValue([older, newer]);
+    render(<App />);
+
+    await screen.findByRole("article", { name: older.title });
+    expectVisibleTitles([newer.title, older.title]);
+
+    const sort = screen.getByLabelText("排序方式");
+    await user.selectOptions(sort, "title");
+    expectVisibleTitles([older.title, newer.title]);
+
+    await user.selectOptions(sort, "rating");
+    expectVisibleTitles([older.title, newer.title]);
+
+    await user.selectOptions(sort, "created");
+    expectVisibleTitles([newer.title, older.title]);
+  });
+
   it("类型和状态可分别筛选，有结果时可一键清除全部条件", async () => {
     const user = userEvent.setup();
     const entries = [
@@ -781,7 +814,7 @@ describe("搜索与筛选", () => {
     expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
 
     await user.click(
-      screen.getByRole("button", { name: "清除搜索和筛选" }),
+      screen.getByRole("button", { name: "重置搜索和筛选" }),
     );
     expectVisibleTitles(entries.map((entry) => entry.title));
     expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
@@ -791,7 +824,7 @@ describe("搜索与筛选", () => {
     expect(screen.getByLabelText("类型筛选")).toHaveValue("all");
 
     await user.click(
-      screen.getByRole("button", { name: "清除搜索和筛选" }),
+      screen.getByRole("button", { name: "重置搜索和筛选" }),
     );
     expectVisibleTitles(entries.map((entry) => entry.title));
     expect(screen.getByLabelText("状态筛选")).toHaveValue("all");
@@ -834,7 +867,7 @@ describe("搜索与筛选", () => {
     expect(summary).toHaveTextContent("已经看完2项完成");
 
     await user.click(
-      screen.getByRole("button", { name: "清除搜索和筛选" }),
+      screen.getByRole("button", { name: "重置搜索和筛选" }),
     );
     expectVisibleTitles(entries.map((entry) => entry.title));
     expect(screen.getByLabelText("搜索标题")).toHaveValue("");
@@ -1375,7 +1408,7 @@ describe("回收站", () => {
     expect(screen.queryByLabelText("状态筛选")).toBeNull();
     expect(screen.queryByRole("button", { name: "添加条目" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "回收站" }),
+      within(sidebar).getByRole("button", { name: /回收站/ }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByRole("button", { name: "清空回收站" }),
@@ -2024,11 +2057,6 @@ describe("Excel 清单导入", () => {
     ).toBeVisible();
     const submit = within(dialog).getByRole("button", { name: "开始导入" });
     expect(submit).toBeDisabled();
-
-    const mobileButton = screen
-      .getAllByRole("button", { name: "导入 Excel" })
-      .find((button) => button.classList.contains("topbar__import-button"));
-    expect(mobileButton).toBeDefined();
   });
 
   it("下载模板按钮调用 download_excel_template 并提示成功", async () => {
@@ -2257,10 +2285,6 @@ describe("设置中心", () => {
     expect(
       within(dialog).getByRole("button", { name: "浅色" }),
     ).toHaveAttribute("aria-pressed", "false");
-    const mobileButton = screen
-      .getAllByRole("button", { name: "设置" })
-      .find((button) => button.classList.contains("topbar__settings-button"));
-    expect(mobileButton).toBeDefined();
   });
 
   it("保存设置时传递完整参数、关闭对话框并提示成功", async () => {

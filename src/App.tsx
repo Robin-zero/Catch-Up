@@ -157,6 +157,14 @@ const MEDIA_TYPE_ICONS: Record<MediaType, ReactNode> = {
 const MEDIA_TYPES = Object.keys(MEDIA_TYPE_LABELS) as MediaType[];
 const ENTRY_STATUSES = ["tracking", "completed", "dropped", "to_watch"] as const;
 
+type SortOrder = "updated" | "created" | "title" | "rating";
+const SORT_LABELS: Record<SortOrder, string> = {
+  updated: "最近更新",
+  created: "最近添加",
+  title: "标题",
+  rating: "评分",
+};
+
 function BrandMark({ size = 28 }: { size?: number }) {
   return (
     <span className="brand-mark" aria-hidden="true" style={{ width: size, height: size }}>
@@ -3194,6 +3202,7 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<
     MediaEntry["status"] | "all"
   >("all");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("updated");
   const latestRequest = useRef(0);
   const trashRequest = useRef(0);
   const entryWriteLocks = useRef(new Set<string>());
@@ -3708,14 +3717,33 @@ function App() {
     normalizedTitleQuery.length > 0 ||
     mediaTypeFilter !== "all" ||
     (!isTrashView && statusFilter !== "all");
-  const visibleEntries = sourceEntries.filter(
-    (entry) =>
-      entry.title.toLowerCase().includes(normalizedTitleQuery) &&
-      (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
-      (isTrashView ||
-        statusFilter === "all" ||
-        entry.status === statusFilter),
-  );
+  const visibleEntries = sourceEntries
+    .filter(
+      (entry) =>
+        entry.title.toLowerCase().includes(normalizedTitleQuery) &&
+        (mediaTypeFilter === "all" || entry.mediaType === mediaTypeFilter) &&
+        (isTrashView ||
+          statusFilter === "all" ||
+          entry.status === statusFilter),
+    )
+    .sort((first, second) => {
+      switch (sortOrder) {
+        case "created":
+          return second.createdAt.localeCompare(first.createdAt);
+        case "title":
+          return first.title.localeCompare(second.title, "zh-Hans-CN");
+        case "rating": {
+          const firstRating = first.rating ?? -1;
+          const secondRating = second.rating ?? -1;
+          if (firstRating !== secondRating) {
+            return secondRating - firstRating;
+          }
+          return second.updatedAt.localeCompare(first.updatedAt);
+        }
+        default:
+          return second.updatedAt.localeCompare(first.updatedAt);
+      }
+    });
   const syncLabel = getSyncLabel(settings, syncState);
 
   function clearFilters() {
@@ -3831,36 +3859,57 @@ function App() {
                     </option>
                   ))}
                 </select>
-
-                <div
-                  className="layout-toggle"
-                  role="group"
-                  aria-label="内容库布局"
-                >
-                  {(Object.keys(LAYOUT_LABELS) as LibraryView[]).map(
-                    (viewKey) => (
-                      <button
-                        key={viewKey}
-                        className="layout-toggle__option"
-                        type="button"
-                        aria-pressed={settings.libraryView === viewKey}
-                        onClick={() => handleLibraryViewChange(viewKey)}
-                      >
-                        {LAYOUT_LABELS[viewKey]}
-                      </button>
-                    ),
-                  )}
-                </div>
               </>
             ) : null}
 
-            {hasActiveFilters && visibleEntries.length > 0 ? (
+            <label className="sr-only" htmlFor="library-sort">
+              排序方式
+            </label>
+            <select
+              id="library-sort"
+              className="compact-select"
+              value={sortOrder}
+              onChange={(event) =>
+                setSortOrder(event.target.value as SortOrder)
+              }
+            >
+              {(Object.keys(SORT_LABELS) as SortOrder[]).map((order) => (
+                <option key={order} value={order}>
+                  {SORT_LABELS[order]}
+                </option>
+              ))}
+            </select>
+
+            {!isTrashView ? (
+              <div className="layout-toggle" role="group" aria-label="内容库布局">
+                {(Object.keys(LAYOUT_LABELS) as LibraryView[]).map(
+                  (viewKey) => (
+                    <button
+                      key={viewKey}
+                      className="layout-toggle__option"
+                      type="button"
+                      aria-pressed={settings.libraryView === viewKey}
+                      onClick={() => handleLibraryViewChange(viewKey)}
+                    >
+                      {LAYOUT_LABELS[viewKey]}
+                    </button>
+                  ),
+                )}
+              </div>
+            ) : null}
+
+            {hasActiveFilters ? (
               <button
-                className="link-button"
+                className="icon-button filter-reset"
                 type="button"
+                aria-label="重置搜索和筛选"
+                title="重置搜索和筛选"
                 onClick={clearFilters}
               >
-                清除搜索和筛选
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M4.5 6.5a6 6 0 1 1-.6 4" />
+                  <path d="M4.5 2.8v3.7H8.2" />
+                </svg>
               </button>
             ) : null}
           </div>
@@ -3876,37 +3925,6 @@ function App() {
               <span className="sync-chip__dot" aria-hidden="true" />
               <span className="sync-chip__label">{syncLabel}</span>
             </button>
-            <button
-              className="icon-button topbar__import-button"
-              type="button"
-              aria-label="导入 Excel"
-              onClick={() => setImportOpen(true)}
-            >
-              <ImportIcon />
-            </button>
-            <button
-              className="icon-button topbar__trash-button"
-              type="button"
-              aria-label="回收站"
-              aria-pressed={isTrashView}
-              onClick={() =>
-                setView((current) =>
-                  current === "trash" ? "library" : "trash",
-                )
-              }
-            >
-              <TrashIcon />
-            </button>
-
-            <button
-              className="icon-button topbar__settings-button"
-              type="button"
-              aria-label="设置"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <SettingsIcon />
-            </button>
-
             {!isTrashView ? (
               <button
                 className={`ghost-button batch-toggle${

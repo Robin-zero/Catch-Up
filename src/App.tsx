@@ -21,7 +21,6 @@ import {
   getLibraryErrorMessage,
   getSettings,
   importExcel,
-  isTauri,
   listEntries,
   listTrash,
   purgeEntry,
@@ -1593,15 +1592,11 @@ function ImportExcelDialog({
     setTemplateNotice(null);
     try {
       const base64 = await downloadExcelTemplate();
-      if (isTauri()) {
-        triggerBase64Download(
-          base64,
-          "追更导入模板.xlsx",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        );
-      } else {
-        triggerBase64Download(base64, "追更导入模板.csv", "text/csv;charset=utf-8");
-      }
+      triggerBase64Download(
+        base64,
+        "追更导入模板.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
       setTemplateNotice("模板已下载，请到下载目录查看。");
     } catch {
       setError("下载模板失败，请重试。");

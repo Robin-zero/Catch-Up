@@ -20,6 +20,7 @@ import {
   aiScrape,
   updateEntry,
 } from "./api";
+import { generateWebTemplate } from "./web";
 import {
   DEFAULT_SETTINGS,
   type EntryInput,
@@ -103,6 +104,15 @@ describe("Tauri 数据访问", () => {
 
     await expect(downloadExcelTemplate()).resolves.toBe("UEsDBA==");
     expect(mockedInvoke).toHaveBeenCalledWith("download_excel_template");
+  });
+
+  it("Web 端模板生成 xlsx 压缩包", () => {
+    const base64 = generateWebTemplate();
+    expect(base64.startsWith("UEsDB")).toBe(true);
+
+    const binary = atob(base64);
+    expect(binary).toContain("xl/workbook.xml");
+    expect(binary).toContain("xl/worksheets/sheet1.xml");
   });
 
   it("通过 update_entry 传递条目 id 和完整输入", async () => {

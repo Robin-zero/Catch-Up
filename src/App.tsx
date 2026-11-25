@@ -169,9 +169,9 @@ function BrandMark({ size = 28 }: { size?: number }) {
   return (
     <span className="brand-mark" aria-hidden="true" style={{ width: size, height: size }}>
       <svg viewBox="0 0 32 32" fill="none">
-        <path d="M9 7.5h11.5A2.5 2.5 0 0 1 23 10v15H11.5A3.5 3.5 0 0 1 8 21.5V8.5" />
-        <path d="M9 7.5v13a4 4 0 0 1 4-4h10M13 12h5" />
-        <path className="brand-mark__check" d="m17 17 2.2 2.2L24 14" />
+        <circle cx="16" cy="16" r="11.4" strokeOpacity="0.18" strokeWidth="2.2" />
+        <path d="M27.4 16A11.4 11.4 0 1 1 16 4.6" strokeWidth="2.6" />
+        <path d="m11.4 16.2 3.5 3.5 8.2-8.6" strokeWidth="2.8" />
       </svg>
     </span>
   );
@@ -3176,8 +3176,8 @@ function App() {
     ...DEFAULT_SETTINGS,
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const dismissSettingsNotice = useCallback(() => setSettingsNotice(null), []);
+  const [appNotice, setAppNotice] = useState<string | null>(null);
+  const dismissAppNotice = useCallback(() => setAppNotice(null), []);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({
     phase: "local",
@@ -3254,7 +3254,7 @@ function App() {
   function handleSettingsSaved(saved: AppSettings) {
     setSettings(saved);
     setSettingsOpen(false);
-    setSettingsNotice("设置已保存");
+    setAppNotice("设置已保存");
     if (!saved.webdavEnabled) {
       if (syncTimerRef.current !== null) {
         window.clearTimeout(syncTimerRef.current);
@@ -3491,6 +3491,7 @@ function App() {
         lastSyncedAt: report.lastSyncedAt,
       }));
       await Promise.all([loadEntries(), loadTrash()]);
+      setAppNotice("同步完成");
     } catch (error) {
       setSyncState({
         phase: "error",
@@ -3676,6 +3677,11 @@ function App() {
             : "light"
           : settings.theme;
       document.documentElement.dataset.theme = resolved;
+      try {
+        window.localStorage.setItem("catchup.theme", resolved);
+      } catch {
+        // 存储不可用时仅影响下次启动的预判主题，不阻断当前渲染。
+      }
       const meta = document.querySelector('meta[name="theme-color"]');
       if (meta) {
         meta.setAttribute(
@@ -4276,8 +4282,8 @@ function App() {
           }}
         />
       ) : null}
-      {settingsNotice ? (
-        <Toast message={settingsNotice} onDismiss={dismissSettingsNotice} />
+      {appNotice ? (
+        <Toast message={appNotice} onDismiss={dismissAppNotice} />
       ) : null}
     </div>
   );

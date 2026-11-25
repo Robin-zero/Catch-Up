@@ -2491,6 +2491,7 @@ describe("WebDAV 自动同步", () => {
     expect(mockedSyncNow).toHaveBeenCalledTimes(1);
     expect(mockedListEntries).toHaveBeenCalledTimes(2);
     expect(sidebarSyncButton()).toHaveTextContent("已同步");
+    expect(await screen.findByText("同步完成")).toBeInTheDocument();
   });
 
   it("同步失败时保留本地条目并在设置中显示错误", async () => {

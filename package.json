@@ -15,6 +15,8 @@
     "build:desktop": "tauri build",
     "dev:android": "tauri android dev",
     "build:android": "tauri android build",
+    "prebuild:android": "npm run android:signing",
+    "android:signing": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android-signing.ps1",
     "dev:ios": "tauri ios dev",
     "build:ios": "tauri ios build"
   },

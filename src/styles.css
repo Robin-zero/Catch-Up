@@ -638,6 +638,7 @@ svg {
   background: var(--surface)
     url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none' stroke='%238a8f84' stroke-width='1.4'%3E%3Cpath d='m1 1 4 4 4-4'/%3E%3C/svg%3E")
     no-repeat right 7px center / 9px 6px;
+  -webkit-appearance: none;
   appearance: none;
   font-size: 11.5px;
   color: var(--text-secondary);
@@ -1806,6 +1807,7 @@ kbd {
 }
 
 .form-field select {
+  -webkit-appearance: none;
   appearance: none;
   padding-right: 24px;
   background: var(--surface)

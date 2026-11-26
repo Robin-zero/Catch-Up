@@ -1,3 +1,4 @@
+import { isTauri as isTauriRuntime } from "@tauri-apps/api/core";
 import { DEFAULT_SETTINGS } from "./types";
 import type {
   AppSettings,
@@ -13,7 +14,7 @@ import type {
 
 /** 在浏览器（非 Tauri WebView）里调用 Tauri 的 `invoke` 会抛错。 */
 export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  return typeof window !== "undefined" && isTauriRuntime();
 }
 
 const ENTRIES_KEY = "catchup.entries.v6";

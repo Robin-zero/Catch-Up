@@ -116,6 +116,26 @@ describe("Tauri 数据访问", () => {
     expect(report.entries[0].totalProgress).toBe(36);
   });
 
+  it("Web 端导入按标题、类型与季判重", async () => {
+    localStorage.clear();
+    const csv = [
+      "标题,类型,季,当前进度",
+      "庆余年,剧集,1,3",
+      "庆余年,剧集,2,5",
+      "庆余年,剧集,2,6",
+      "庆余年,电影,,1",
+    ].join("\n");
+    const base64 = btoa(
+      String.fromCharCode(...new TextEncoder().encode(csv)),
+    );
+
+    const report = await importWebExcel(base64, "drama");
+
+    expect(report.imported).toBe(3);
+    expect(report.skipped).toBe(1);
+    expect(report.entries.map((item) => item.season)).toEqual(["1", "2", null]);
+  });
+
   it("Web 端模板生成与桌面端一致的 xlsx", () => {
     const base64 = generateWebTemplate();
     expect(base64.startsWith("UEsDB")).toBe(true);

@@ -2343,6 +2343,14 @@ function SettingsDialog({
                   {syncState.report.downloaded} 项。
                 </p>
               ) : null}
+              {syncState.phase === "synced" && syncState.report?.warnings.length ? (
+                <p
+                  className="settings-sync-result settings-sync-result--error"
+                  role="alert"
+                >
+                  部分内容未同步：{syncState.report.warnings.join("；")}
+                </p>
+              ) : null}
               {syncState.phase === "error" && syncState.message ? (
                 <p className="settings-sync-result settings-sync-result--error" role="alert">
                   {syncState.message}

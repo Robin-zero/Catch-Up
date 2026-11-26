@@ -16,6 +16,7 @@ use crate::{
 };
 
 const SYNC_FILE_NAME: &str = "catchup-sync.json";
+const FALLBACK_DIRECTORY_NAME: &str = "CatchUp";
 const SNAPSHOT_VERSION: u32 = 1;
 const SYNC_TIMEOUT_SECONDS: u64 = 20;
 const COVER_DIRECTORY_NAME: &str = "covers";
@@ -34,6 +35,8 @@ pub struct SyncReport {
     /// 远端较新采用条数。
     pub downloaded: u32,
     pub last_synced_at: String,
+    /// 不影响整体同步、但需要提示用户的问题（例如个别封面没有上传成功）。
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -177,6 +180,44 @@ fn prepare_sync_url(settings: &AppSettings) -> Result<String, String> {
     normalize_sync_url(&settings.webdav_url)
 }
 
+/// 用户直接把地址填成了具体的 .json 文件，此时完全按用户给的路径写入。
+fn is_explicit_sync_file(raw_url: &str) -> bool {
+    raw_url
+        .trim()
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+        .ends_with(".json")
+}
+
+/// 部分服务端（例如坚果云根目录）不允许直接在配置目录创建文件，
+/// 此时把快照放进由程序拼接的子目录，用户不需要在地址里额外加一层。
+fn fallback_snapshot_url(url: &str) -> Option<String> {
+    let directory = parent_collection_url(url)?;
+    let last = directory.rsplit('/').next().unwrap_or_default();
+    if last.eq_ignore_ascii_case(FALLBACK_DIRECTORY_NAME) {
+        return None;
+    }
+    Some(format!(
+        "{directory}/{FALLBACK_DIRECTORY_NAME}/{SYNC_FILE_NAME}"
+    ))
+}
+
+async fn get_status(
+    client: &reqwest::Client,
+    url: &str,
+    settings: &AppSettings,
+) -> Result<u16, String> {
+    let mut request = client.get(url);
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    Ok(response.status().as_u16())
+}
+
 fn authorization_header(settings: &AppSettings) -> Option<String> {
     let username = settings.webdav_username.trim();
     if username.is_empty() {
@@ -210,15 +251,12 @@ fn build_client() -> Result<reqwest::Client, String> {
 pub async fn test_connection(settings: &AppSettings) -> Result<String, String> {
     let url = normalize_sync_url(&settings.webdav_url)?;
     let client = build_client()?;
-    let mut request = client.get(&url);
-    if let Some(header) = authorization_header(settings) {
-        request = request.header(AUTHORIZATION, header);
+    let mut status = get_status(&client, &url, settings).await?;
+    if status == 404 && !is_explicit_sync_file(&settings.webdav_url) {
+        if let Some(fallback_url) = fallback_snapshot_url(&url) {
+            status = get_status(&client, &fallback_url, settings).await?;
+        }
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| describe_request_error(&error))?;
-    let status = response.status().as_u16();
     match status {
         200..=299 => Ok("连接成功，已找到同步数据。".to_owned()),
         404 => Ok("连接成功，远端暂无同步数据。".to_owned()),
@@ -235,7 +273,7 @@ async fn fetch_snapshot(
     client: &reqwest::Client,
     url: &str,
     settings: &AppSettings,
-) -> Result<SyncSnapshot, String> {
+) -> Result<(SyncSnapshot, bool), String> {
     let mut request = client.get(url);
     if let Some(header) = authorization_header(settings) {
         request = request.header(AUTHORIZATION, header);
@@ -246,10 +284,13 @@ async fn fetch_snapshot(
         .map_err(|error| describe_request_error(&error))?;
     let status = response.status();
     if status.as_u16() == 404 {
-        return Ok(SyncSnapshot {
-            version: SNAPSHOT_VERSION,
-            ..SyncSnapshot::default()
-        });
+        return Ok((
+            SyncSnapshot {
+                version: SNAPSHOT_VERSION,
+                ..SyncSnapshot::default()
+            },
+            false,
+        ));
     }
     if !status.is_success() {
         return Err(format!(
@@ -263,26 +304,44 @@ async fn fetch_snapshot(
         .await
         .map_err(|error| format!("读取 WebDAV 返回内容失败：{error}"))?;
     if body.trim().is_empty() {
-        return Ok(SyncSnapshot {
-            version: SNAPSHOT_VERSION,
-            ..SyncSnapshot::default()
-        });
+        return Ok((
+            SyncSnapshot {
+                version: SNAPSHOT_VERSION,
+                ..SyncSnapshot::default()
+            },
+            true,
+        ));
     }
-    serde_json::from_str(&body).map_err(|error| format!("解析 WebDAV 同步数据失败：{error}"))
+    let snapshot = serde_json::from_str(&body)
+        .map_err(|error| format!("解析 WebDAV 同步数据失败：{error}"))?;
+    Ok((snapshot, true))
 }
 
-async fn put_snapshot(
+/// 同步数据所在目录（去掉文件名后的地址）。
+fn parent_collection_url(url: &str) -> Option<String> {
+    let (base, _) = url.rsplit_once('/')?;
+    (!base.is_empty()).then(|| base.to_owned())
+}
+
+fn snapshot_write_error(status: u16, directory: &str) -> String {
+    match status {
+        401 | 403 => format!(
+            "写入 WebDAV 同步数据失败（HTTP {status}），请检查用户名、密码与目录权限。"
+        ),
+        404 | 409 => format!(
+            "写入 WebDAV 同步数据失败（HTTP {status}）：目标目录不存在或不允许直接写入（{directory}）。请在 WebDAV 中创建该目录，或把地址改成一个可写的子目录后重试。"
+        ),
+        _ => format!("写入 WebDAV 同步数据失败（HTTP {status}），请检查地址与写入权限。"),
+    }
+}
+
+async fn create_collection(
     client: &reqwest::Client,
     url: &str,
     settings: &AppSettings,
-    snapshot: &SyncSnapshot,
-) -> Result<(), String> {
-    let body = serde_json::to_string(snapshot)
-        .map_err(|error| format!("生成 WebDAV 同步数据失败：{error}"))?;
-    let mut request = client
-        .put(url)
-        .header(CONTENT_TYPE, "application/json")
-        .body(body);
+) -> Result<u16, String> {
+    let method = reqwest::Method::from_bytes(b"MKCOL").expect("MKCOL 是合法方法");
+    let mut request = client.request(method, url);
     if let Some(header) = authorization_header(settings) {
         request = request.header(AUTHORIZATION, header);
     }
@@ -290,14 +349,81 @@ async fn put_snapshot(
         .send()
         .await
         .map_err(|error| describe_request_error(&error))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "写入 WebDAV 同步数据失败（HTTP {}），请检查地址与写入权限。",
-            status.as_u16()
+    Ok(response.status().as_u16())
+}
+
+async fn send_snapshot(
+    client: &reqwest::Client,
+    url: &str,
+    settings: &AppSettings,
+    body: &str,
+) -> Result<u16, String> {
+    let mut request = client
+        .put(url)
+        .header(CONTENT_TYPE, "application/json")
+        .body(body.to_owned());
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    Ok(response.status().as_u16())
+}
+
+async fn put_snapshot(
+    client: &reqwest::Client,
+    url: &str,
+    settings: &AppSettings,
+    snapshot: &SyncSnapshot,
+    allow_fallback: bool,
+) -> Result<(), String> {
+    let body = serde_json::to_string(snapshot)
+        .map_err(|error| format!("生成 WebDAV 同步数据失败：{error}"))?;
+    let status = send_snapshot(client, url, settings, &body).await?;
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    if !matches!(status, 404 | 409) {
+        return Err(snapshot_write_error(
+            status,
+            parent_collection_url(url).as_deref().unwrap_or(url),
         ));
     }
-    Ok(())
+
+    // 404/409 通常意味着目标目录不存在：创建后重试一次。
+    let directory = parent_collection_url(url).unwrap_or_else(|| url.to_owned());
+    if create_collection(client, &directory, settings).await.is_ok() {
+        let retry = send_snapshot(client, url, settings, &body).await?;
+        if (200..300).contains(&retry) {
+            return Ok(());
+        }
+    }
+
+    // 部分服务端（例如坚果云根目录）不允许在配置目录里直接创建文件，
+    // 退回程序自动拼接的子目录，用户无需修改设置。
+    if allow_fallback {
+        if let Some(fallback_url) = fallback_snapshot_url(url) {
+            let fallback_directory = parent_collection_url(&fallback_url)
+                .unwrap_or_else(|| fallback_url.clone());
+            if create_collection(client, &fallback_directory, settings)
+                .await
+                .is_ok()
+            {
+                let fallback_status = send_snapshot(client, &fallback_url, settings, &body).await?;
+                if (200..300).contains(&fallback_status) {
+                    return Ok(());
+                }
+                return Err(snapshot_write_error(
+                    fallback_status,
+                    &fallback_directory,
+                ));
+            }
+        }
+    }
+
+    Err(snapshot_write_error(status, &directory))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,30 +524,33 @@ async fn download_cover(
     Ok(path)
 }
 
+fn collection_ready(status: u16) -> bool {
+    // 405 表示目录已存在，部分服务端也用它代替 201。
+    (200..300).contains(&status) || status == 405
+}
+
 async fn ensure_cover_collection(
     client: &reqwest::Client,
     covers_url: &str,
     settings: &AppSettings,
 ) -> Result<(), String> {
-    let method = reqwest::Method::from_bytes(b"MKCOL").expect("MKCOL 是合法方法");
-    let mut request = client.request(method, covers_url);
-    if let Some(header) = authorization_header(settings) {
-        request = request.header(AUTHORIZATION, header);
+    let status = create_collection(client, covers_url, settings).await?;
+    if collection_ready(status) {
+        return Ok(());
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| describe_request_error(&error))?;
-    let status = response.status();
-    // 405 表示目录已存在，部分服务端也用它代替 201。
-    if status.is_success() || status.as_u16() == 405 {
-        Ok(())
-    } else {
-        Err(format!(
-            "创建 WebDAV 封面目录失败（HTTP {}）",
-            status.as_u16()
-        ))
+    // 409：父目录还不存在，先创建父目录再重试一次。
+    if status == 409 {
+        if let Some(parent) = parent_collection_url(covers_url) {
+            if create_collection(client, &parent, settings).await.is_ok() {
+                let retry = create_collection(client, covers_url, settings).await?;
+                if collection_ready(retry) {
+                    return Ok(());
+                }
+                return Err(format!("创建 WebDAV 封面目录失败（HTTP {retry}）"));
+            }
+        }
     }
+    Err(format!("创建 WebDAV 封面目录失败（HTTP {status}）"))
 }
 
 async fn upload_cover(
@@ -483,6 +612,7 @@ async fn hydrate_cover_markers(
 }
 
 /// 把本地封面文件上传到 WebDAV，并把条目中的封面替换成可跨设备识别的标记。
+/// 个别封面失败不影响整体同步，失败原因通过返回值交给界面提示。
 async fn publish_local_covers(
     client: &reqwest::Client,
     covers_url: &str,
@@ -490,8 +620,9 @@ async fn publish_local_covers(
     covers_directory: &Path,
     manifest: &mut CoverManifest,
     entries: &mut [SyncEntry],
-) {
+) -> Vec<String> {
     let mut collection_ready = false;
+    let mut warnings = Vec::new();
 
     for entry in entries {
         let Some(value) = entry.cover_url.clone() else {
@@ -524,24 +655,22 @@ async fn publish_local_covers(
             .is_some_and(|names| names.contains(name));
         if !uploaded {
             let Ok(bytes) = std::fs::read(&path) else {
+                warnings.push(format!("读取本地封面失败：{name}"));
                 continue;
             };
             if bytes.len() > MAX_COVER_BYTES {
+                warnings.push(format!("封面超过 10MB，已跳过：{name}"));
                 continue;
             }
             if !collection_ready {
-                if ensure_cover_collection(client, covers_url, settings)
-                    .await
-                    .is_err()
-                {
-                    return;
+                if let Err(error) = ensure_cover_collection(client, covers_url, settings).await {
+                    warnings.push(error);
+                    return warnings;
                 }
                 collection_ready = true;
             }
-            if upload_cover(client, covers_url, settings, name, bytes)
-                .await
-                .is_err()
-            {
+            if let Err(error) = upload_cover(client, covers_url, settings, name, bytes).await {
+                warnings.push(format!("{error}：{name}"));
                 continue;
             }
             manifest
@@ -553,6 +682,8 @@ async fn publish_local_covers(
 
         entry.cover_url = Some(cover_marker(name));
     }
+
+    warnings
 }
 
 pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<SyncReport, String> {
@@ -561,19 +692,34 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
     let _guard = SYNC_LOCK.lock().await;
 
     let settings = database.get_settings()?;
-    let url = prepare_sync_url(&settings)?;
+    let primary_url = prepare_sync_url(&settings)?;
+    // 用户显式填了 .json 文件路径时，尊重原路径，不再追加子目录。
+    let explicit_file = is_explicit_sync_file(&settings.webdav_url);
+    // 封面始终放在配置目录下的 catchup-covers，快照换位置不需要重传封面。
+    let covers_base = covers_base_url(&primary_url);
 
     // 读取本地数据后立即释放数据库锁，网络请求期间不持有 MutexGuard。
     let (mut local_entries, local_purged) = database.read_sync_state()?;
 
     let client = build_client()?;
-    let mut remote = fetch_snapshot(&client, &url, &settings).await?;
+    let (mut remote, remote_exists) = fetch_snapshot(&client, &primary_url, &settings).await?;
+    let mut url = primary_url;
+    if !remote_exists && !explicit_file {
+        // 配置目录里没有快照时，检查程序自动拼接的子目录（兼容不允许在根目录建文件的服务端）。
+        if let Some(fallback_url) = fallback_snapshot_url(&url) {
+            let (fallback_remote, fallback_exists) =
+                fetch_snapshot(&client, &fallback_url, &settings).await?;
+            if fallback_exists {
+                url = fallback_url;
+                remote = fallback_remote;
+            }
+        }
+    }
 
     let covers_directory = data_directory.join(COVER_DIRECTORY_NAME);
     let manifest_path = data_directory.join(COVER_MANIFEST_FILE);
     let mut manifest = load_cover_manifest(&manifest_path);
     let original_manifest = manifest.clone();
-    let covers_base = covers_base_url(&url);
 
     if let Some(covers_url) = covers_base.as_deref() {
         hydrate_cover_markers(
@@ -607,7 +753,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
     database.apply_sync_merge(&merge.entries, &merge.purged)?;
 
     let mut snapshot_entries = merge.entries;
-    if let Some(covers_url) = covers_base.as_deref() {
+    let warnings = if let Some(covers_url) = covers_base.as_deref() {
         publish_local_covers(
             &client,
             covers_url,
@@ -616,8 +762,10 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
             &mut manifest,
             &mut snapshot_entries,
         )
-        .await;
-    }
+        .await
+    } else {
+        Vec::new()
+    };
     if manifest != original_manifest {
         let _ = save_cover_manifest(&manifest_path, &manifest);
     }
@@ -629,7 +777,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
         entries: snapshot_entries,
         purged: merge.purged,
     };
-    put_snapshot(&client, &url, &settings, &snapshot).await?;
+    put_snapshot(&client, &url, &settings, &snapshot, !explicit_file).await?;
 
     database.set_last_synced_at(&exported_at)?;
 
@@ -638,6 +786,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
         uploaded: merge.uploaded,
         downloaded: merge.downloaded,
         last_synced_at: exported_at,
+        warnings,
     })
 }
 
@@ -876,13 +1025,61 @@ mod tests {
             uploaded: 1,
             downloaded: 2,
             last_synced_at: "2026-11-20T08:00:00.000000000Z".to_owned(),
+            warnings: vec!["上传封面失败（HTTP 404）：cover-1.jpg".to_owned()],
         };
         let value: Value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["merged"], json!(3));
         assert_eq!(value["uploaded"], json!(1));
         assert_eq!(value["downloaded"], json!(2));
+        assert_eq!(
+            value["warnings"][0],
+            json!("上传封面失败（HTTP 404）：cover-1.jpg")
+        );
         DateTime::parse_from_rfc3339(value["lastSyncedAt"].as_str().unwrap()).unwrap();
         assert!(value.get("last_synced_at").is_none());
+    }
+
+    #[test]
+    fn snapshot_write_error_explains_missing_directory() {
+        let message = snapshot_write_error(404, "https://dav.example.com/dav/CatchUp");
+        assert!(message.contains("目标目录不存在"));
+        assert!(message.contains("https://dav.example.com/dav/CatchUp"));
+        assert!(snapshot_write_error(403, "https://dav.example.com/dav").contains("权限"));
+    }
+
+    #[test]
+    fn parent_collection_url_drops_the_file_name() {
+        assert_eq!(
+            parent_collection_url("https://dav.example.com/dav/CatchUp/catchup-sync.json")
+                .as_deref(),
+            Some("https://dav.example.com/dav/CatchUp")
+        );
+        assert_eq!(
+            parent_collection_url("https://dav.example.com/dav/catchup-sync.json").as_deref(),
+            Some("https://dav.example.com/dav")
+        );
+        assert_eq!(parent_collection_url("catchup-sync.json"), None);
+    }
+
+    #[test]
+    fn fallback_directory_is_appended_only_when_needed() {
+        assert_eq!(
+            fallback_snapshot_url("https://dav.example.com/dav/catchup-sync.json").as_deref(),
+            Some("https://dav.example.com/dav/CatchUp/catchup-sync.json")
+        );
+        assert_eq!(
+            fallback_snapshot_url("https://dav.example.com/dav/CatchUp/catchup-sync.json"),
+            None
+        );
+        assert_eq!(fallback_snapshot_url("catchup-sync.json"), None);
+    }
+
+    #[test]
+    fn explicit_json_path_is_respected() {
+        assert!(is_explicit_sync_file("https://dav.example.com/dav/custom.json"));
+        assert!(is_explicit_sync_file(" https://dav.example.com/dav/custom.JSON/ "));
+        assert!(!is_explicit_sync_file("https://dav.example.com/dav/"));
+        assert!(!is_explicit_sync_file("https://dav.example.com/dav"));
     }
 
     #[test]

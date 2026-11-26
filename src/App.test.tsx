@@ -102,6 +102,7 @@ function makeSyncReport(overrides: Partial<SyncReport> = {}): SyncReport {
     uploaded: 0,
     downloaded: 0,
     lastSyncedAt: "2026-11-20T04:05:06.000000000Z",
+    warnings: [],
     ...overrides,
   };
 }

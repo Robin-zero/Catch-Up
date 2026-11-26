@@ -174,6 +174,12 @@ Android 签名信息来自本地 `~/.catchup-keystore/signing.properties`（keys
 └─ catchup-covers\
    ├─ cover-<uuid>.jpg
    └─ ...
+
+# 若服务端不允许在该目录直接创建文件（例如坚果云的 WebDAV 根目录），
+# 快照会自动写到同级子目录，封面目录位置不变：
+你配置的 WebDAV 目录\
+├─ CatchUp\catchup-sync.json
+└─ catchup-covers\
 ```
 
 一次同步的流程：

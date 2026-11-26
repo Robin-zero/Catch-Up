@@ -39,6 +39,7 @@ export interface SyncReport {
   uploaded: number;
   downloaded: number;
   lastSyncedAt: string;
+  warnings: string[];
 }
 
 export interface AppSettings {

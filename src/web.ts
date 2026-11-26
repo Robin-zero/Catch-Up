@@ -850,7 +850,13 @@ export function syncWebNow(): SyncReport {
   }
   const now_ = now();
   const updated = saveWebSettings({ ...settings, lastSyncedAt: now_ });
-  return { merged: 0, uploaded: 0, downloaded: 0, lastSyncedAt: updated.lastSyncedAt! };
+  return {
+    merged: 0,
+    uploaded: 0,
+    downloaded: 0,
+    lastSyncedAt: updated.lastSyncedAt!,
+    warnings: [],
+  };
 }
 
 /** 浏览器端只做一次只读请求，验证地址与账号是否可用。 */
@@ -1472,7 +1478,10 @@ function importRows(
       updatedAt: now(),
     };
     const duplicate = existing.find(
-      (item) => item.title === entry.title && item.mediaType === entry.mediaType,
+      (item) =>
+        item.title === entry.title &&
+        item.mediaType === entry.mediaType &&
+        (item.season ?? null) === entry.season,
     );
     if (duplicate) {
       result.skipped += 1;

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>追更 CatchUp · 把每一部在追的故事，收进一条进度线</title>
-<meta name="description" content="追更 CatchUp 是一个本地优先的观看与阅读进度记录器：五种内容类型、四种状态、进度步进、回收站、TMDB / Bangumi / AniList 补全与 WebDAV 多设备同步。" />
+<meta name="description" content="追更 CatchUp 是一个本地优先的观看与阅读进度记录器：五种内容类型、四种状态、进度步进、回收站、TMDB / Bangumi / AniList 补全与 WebDAV 多设备同步；支持 Windows、macOS、Android 与 iOS。" />
 <meta name="theme-color" content="#08110e" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231F5D48'/%3E%3Ccircle cx='16' cy='16' r='9.8' fill='none' stroke='%23F4F7F2' stroke-opacity='.28' stroke-width='2.4'/%3E%3Cpath d='M24.8 16A8.8 8.8 0 1 1 16 7.2' fill='none' stroke='%23F4F7F2' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='m12.4 16.2 2.7 2.7 6.2-6.5' fill='none' stroke='%23F4F7F2' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <script>
@@ -401,259 +401,9 @@
     transition: transform 0.35s var(--ease);
   }
 
-  .window {
-    position: relative;
-    border-radius: 16px;
-    border: 1px solid var(--rule-strong);
-    background: linear-gradient(180deg, var(--bg2), color-mix(in srgb, var(--bg2) 82%, #000));
-    box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    overflow: hidden;
-    animation: floaty 9s ease-in-out infinite;
-  }
-  @keyframes floaty {
-    0%, 100% { transform: translateY(0) rotate(-0.5deg); }
-    50% { transform: translateY(-11px) rotate(-0.1deg); }
-  }
-
-  .win-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 11px 14px;
-    border-bottom: 1px solid var(--rule);
-    background: color-mix(in srgb, var(--surface) 55%, transparent);
-    font-size: 11.5px;
-    color: var(--faint);
-  }
-  .dots { display: inline-flex; gap: 6px; }
-  .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--rule-strong); }
-  .dots i:nth-child(1) { background: #e2685f; }
-  .dots i:nth-child(2) { background: var(--gold); }
-  .dots i:nth-child(3) { background: var(--accent); opacity: 0.85; }
-  .win-title { letter-spacing: 0.04em; }
-  .win-sync {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 10.5px;
-    font-weight: 600;
-  }
-  .pulse-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 0 rgba(86, 224, 161, 0.6);
-    animation: ping 2.4s ease-out infinite;
-  }
-  @keyframes ping {
-    0% { box-shadow: 0 0 0 0 rgba(86, 224, 161, 0.55); }
-    70% { box-shadow: 0 0 0 7px rgba(86, 224, 161, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(86, 224, 161, 0); }
-  }
-
-  .win-top {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 13px 14px 10px;
-  }
-  .win-brand { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 650; white-space: nowrap; }
-  .win-brand svg { width: 19px; height: 19px; color: var(--accent); }
-  .win-brand b { color: var(--accent); font-weight: 700; }
-  .win-search {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    height: 30px;
-    padding: 0 10px;
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--surface-2) 70%, transparent);
-    color: var(--faint);
-    font-size: 11.5px;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  .win-search svg { width: 13px; height: 13px; flex: none; }
-  .win-add {
-    height: 30px;
-    padding: 0 12px;
-    display: inline-flex;
-    align-items: center;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #05130d;
-    font-size: 11.5px;
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
-  .win-chips {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 14px 12px;
-    overflow: hidden;
-  }
-  .chip {
-    padding: 3px 9px;
-    border: 1px solid var(--rule);
-    border-radius: 999px;
-    font-size: 10.5px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-  .chip--on {
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-weight: 600;
-  }
-  .win-sort { margin-left: auto; font-size: 10.5px; color: var(--faint); white-space: nowrap; }
-
-  .win-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    padding: 0 14px 12px;
-  }
-
-  .mc { min-width: 0; }
-  .mc-cover {
-    position: relative;
-    aspect-ratio: 3 / 4;
-    border-radius: 9px;
-    overflow: hidden;
-    display: flex;
-    align-items: flex-end;
-    padding: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #f4f7f2;
-    isolation: isolate;
-  }
-  .mc-cover::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background:
-      radial-gradient(120% 80% at 76% 8%, rgba(255, 255, 255, 0.34), transparent 55%),
-      radial-gradient(100% 90% at 12% 96%, rgba(0, 0, 0, 0.55), transparent 62%),
-      var(--cover, linear-gradient(160deg, #245c4a, #0d211b));
-  }
-  .mc-cover::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background-image: repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 9px);
-    opacity: 0.5;
-  }
-  .cover--1 { --cover: linear-gradient(155deg, #1f5d48 0%, #0d3b31 52%, #071a17 100%); }
-  .cover--2 { --cover: linear-gradient(155deg, #7a5024 0%, #4b2f16 56%, #1d130a 100%); }
-  .cover--3 { --cover: linear-gradient(155deg, #40356e 0%, #262046 58%, #100e21 100%); }
-  .cover--4 { --cover: linear-gradient(155deg, #6d2f3c 0%, #41202a 58%, #180d11 100%); }
-  .cover--5 { --cover: linear-gradient(155deg, #24506b 0%, #163348 58%, #0a1720 100%); }
-  .cover--6 { --cover: linear-gradient(155deg, #3f5a2c 0%, #27381c 58%, #10160b 100%); }
-
-  .mc-title {
-    font-size: 12.5px;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    line-height: 1.3;
-    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-  }
-  .mc-type {
-    position: absolute;
-    top: 7px;
-    left: 7px;
-    padding: 2px 6px;
-    border-radius: 5px;
-    background: rgba(6, 18, 13, 0.55);
-    backdrop-filter: blur(4px);
-    font-size: 9.5px;
-    letter-spacing: 0.06em;
-    color: rgba(244, 247, 242, 0.9);
-  }
-  .mc-season {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    font-size: 9.5px;
-    font-family: var(--mono);
-    color: rgba(244, 247, 242, 0.75);
-  }
-  .mc-meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-top: 6px;
-    font-size: 10px;
-    color: var(--faint);
-  }
-  .mc-status { color: var(--accent); font-weight: 600; }
-  .mc-status[data-s="已完成"] { color: var(--gold); }
-  .mc-status[data-s="待看"] { color: var(--muted); }
-  .mc-bar {
-    height: 3px;
-    margin-top: 5px;
-    border-radius: 999px;
-    background: var(--rule);
-    overflow: hidden;
-  }
-  .mc-bar i {
-    display: block;
-    height: 100%;
-    width: var(--p, 0%);
-    border-radius: inherit;
-    background: linear-gradient(90deg, var(--accent), #9df3c9);
-    transform-origin: 0 50%;
-    animation: barIn 1.4s var(--ease) both;
-  }
-  @keyframes barIn { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-
-  .win-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 9px 14px;
-    border-top: 1px solid var(--rule);
-    background: color-mix(in srgb, var(--surface) 40%, transparent);
-    font-size: 10.5px;
-    color: var(--faint);
-  }
-  .win-foot-right { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
-
-  .float-card {
-    position: absolute;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 10px 13px;
-    border: 1px solid var(--rule-strong);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
-    backdrop-filter: blur(10px);
-    box-shadow: 0 20px 40px -22px rgba(0, 0, 0, 0.8);
-    font-size: 11.5px;
-    color: var(--muted);
-    animation: floaty 7s ease-in-out infinite;
-  }
-  .float-card b { color: var(--ink); font-weight: 650; }
-  .float-card svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
-  .float-card--a { right: 10px; top: -24px; animation-delay: -2.2s; }
-  .float-card--b { left: 18px; bottom: -24px; animation-delay: -4.4s; }
-
+  /* 英雄区手机 */
+  .phone.hero-phone { width: min(258px, 78%); margin: 0 auto; }
+  .hero-phone .phone__screen { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
   /* 数据带 */
   .stats {
     margin: clamp(40px, 6vw, 72px) 0 0;
@@ -978,101 +728,165 @@
   .stack-list li:last-child { border-bottom: 0; padding-bottom: 0; }
   .stack-list span { color: var(--muted); font-size: 11.5px; font-family: var(--mono); white-space: nowrap; }
 
-  /* 开始使用 */
-  .start-grid {
+  /* 移动端外框 */
+  .phones {
     display: grid;
-    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
-    gap: clamp(26px, 4vw, 48px);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(16px, 2.6vw, 30px);
     align-items: start;
+    margin-bottom: clamp(34px, 5vw, 58px);
+  }
+  .phone-figure { display: flex; flex-direction: column; align-items: center; gap: 15px; margin: 0; }
+  .phone-figure figcaption { font-size: 12.5px; color: var(--muted); text-align: center; }
+  .phone-figure figcaption b { color: var(--ink); font-weight: 650; }
+  .phone {
+    position: relative;
+    width: min(238px, 100%);
+    padding: 9px;
+    border-radius: 40px;
+    background: linear-gradient(160deg, #4a4d54, #17181b 45%, #2b2e34);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+      0 22px 44px -16px rgba(0, 0, 0, 0.55),
+      0 4px 12px rgba(0, 0, 0, 0.18);
+  }
+  .phone::before,
+  .phone::after {
+    content: "";
+    position: absolute;
+    width: 3px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #4a4d54, #202226);
+  }
+  .phone::before { left: -2px; top: 96px; height: 26px; box-shadow: 0 46px 0 #232529; }
+  .phone::after { right: -2px; top: 118px; height: 62px; }
+  .phone__screen {
+    position: relative;
+    overflow: hidden;
+    border-radius: 32px;
+    background: #000;
+  }
+  .phone__screen > img { display: block; width: 100%; height: auto; }
+  .phone__island {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 32%;
+    height: 18px;
+    transform: translateX(-50%);
+    border-radius: 12px;
+    background: #05060a;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+    z-index: 3;
+    pointer-events: none;
   }
 
-  .kbd-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-  .kbd-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 11px;
+  /* 桌面端截图 */
+  .desktop-figure { margin: 0; }
+  .desktop-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
     border: 1px solid var(--rule);
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--surface) 60%, transparent);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .desktop-figure figcaption { margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+  .desktop-figure figcaption b { color: var(--ink); font-weight: 650; }
+
+  /* 深浅色对比 */
+  .compare { position: relative; overflow: hidden; margin: 0; border-radius: 14px; }
+  .compare__img { display: block; width: 100%; height: auto; }
+  .compare__dark {
+    position: absolute;
+    inset: 0;
+    clip-path: polygon(60% 0, 100% 0, 100% 100%, 44% 100%);
+    animation: seam-desk 12s ease-in-out infinite alternate;
+  }
+  .compare__dark img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .compare--desktop {
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .compare__seam {
+    position: absolute;
+    top: -2%;
+    bottom: -2%;
+    left: 52%;
+    width: 2px;
+    background: linear-gradient(180deg, transparent, rgba(126, 226, 178, 0.9) 16%, rgba(126, 226, 178, 0.5) 84%, transparent);
+    box-shadow: 0 0 16px rgba(126, 226, 178, 0.45);
+    transform: translateX(-1px) rotate(14.5deg);
+    animation: seam-x 12s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+  .theme-compare { margin: 0; }
+  .theme-compare__legend {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-top: 13px;
     font-size: 12px;
     color: var(--muted);
   }
-  kbd {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    padding: 2px 6px;
+  .theme-compare__hint { margin-left: auto; color: var(--faint); }
+  .legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    border-radius: 3px;
     border: 1px solid var(--rule-strong);
-    border-bottom-width: 2px;
-    border-radius: 5px;
-    background: var(--surface-2);
-    color: var(--ink);
-    white-space: nowrap;
+    vertical-align: -1px;
   }
-
-  .code-card {
-    margin-top: 16px;
-    border: 1px solid var(--rule);
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--bg2) 92%, transparent);
-    overflow: hidden;
-  }
-  .code-card__head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--rule);
-    font-size: 11.5px;
-    color: var(--faint);
-  }
-  .code-card__head b { color: var(--ink); font-weight: 600; }
-  .copy-btn {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border: 1px solid var(--rule);
-    border-radius: 7px;
-    background: var(--surface);
-    font-size: 11px;
-    color: var(--muted);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  .copy-btn:hover { border-color: var(--accent-line); color: var(--accent); }
-  .copy-btn.is-done { border-color: var(--accent-line); color: var(--accent); background: var(--accent-soft); }
-  .code-card pre {
-    margin: 0;
-    padding: 15px 16px;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 1.9;
-    color: var(--muted);
-    overflow-x: auto;
-  }
-  .code-card .c { color: var(--faint); }
-  .code-card .k { color: var(--accent); }
-
-  .cmd-table {
-    margin-top: 16px;
-    border: 1px solid var(--rule);
-    border-radius: 14px;
-    overflow: hidden;
-    font-size: 12.5px;
-  }
-  .cmd-row {
+  .legend-dot--light { background: #f7f7f3; }
+  .legend-dot--dark { background: #1c1f26; }
+  .themes-phone {
     display: grid;
-    grid-template-columns: 170px 1fr;
-    gap: 12px;
-    padding: 9px 14px;
-    border-bottom: 1px solid var(--rule);
-    color: var(--muted);
+    grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+    gap: clamp(28px, 5vw, 64px);
+    align-items: center;
+    margin-top: clamp(30px, 4vw, 48px);
   }
-  .cmd-row:last-child { border-bottom: 0; }
-  .cmd-row:nth-child(odd) { background: color-mix(in srgb, var(--surface) 40%, transparent); }
-  .cmd-row code { font-family: var(--mono); color: var(--ink); font-size: 12px; }
+  .themes-phone .phone { width: min(244px, 82%); margin: 0 auto; }
+  .themes-phone .compare { border-radius: 32px; }
+  .themes-phone .compare__dark {
+    clip-path: polygon(66% 0, 100% 0, 100% 100%, 30% 100%);
+    animation: seam-phone 12s ease-in-out infinite alternate;
+  }
+  .themes-phone .compare__seam {
+    left: 48%;
+    transform: translateX(-1px) rotate(10.5deg);
+    animation: seam-phone-x 12s ease-in-out infinite alternate;
+  }
+  .themes-phone h3 { font-size: 20px; margin-bottom: 10px; }
+  .themes-phone p { color: var(--muted); font-size: 13.5px; line-height: 1.7; margin: 0 0 14px; }
+  @keyframes seam-desk {
+    from { clip-path: polygon(60% 0, 100% 0, 100% 100%, 44% 100%); }
+    to { clip-path: polygon(56% 0, 100% 0, 100% 100%, 40% 100%); }
+  }
+  @keyframes seam-x {
+    from { left: 52%; }
+    to { left: 48%; }
+  }
+  @keyframes seam-phone {
+    from { clip-path: polygon(66% 0, 100% 0, 100% 100%, 30% 100%); }
+    to { clip-path: polygon(62% 0, 100% 0, 100% 100%, 26% 100%); }
+  }
+  @keyframes seam-phone-x {
+    from { left: 48%; }
+    to { left: 44%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .compare__dark,
+    .compare__seam { animation: none; }
+  }
+  @media (max-width: 900px) {
+    .phones { grid-template-columns: minmax(0, 280px); justify-content: center; }
+    .themes-phone { grid-template-columns: 1fr; }
+  }
 
   /* 结尾 */
   .finale {
@@ -1139,7 +953,7 @@
   @media (max-width: 1000px) {
     .bento .card { grid-column: span 6; }
     .bento .card--wide, .bento .card--full { grid-column: span 12; }
-    .sync-grid, .start-grid { grid-template-columns: 1fr; }
+    .sync-grid { grid-template-columns: 1fr; }
     .stack-grid { grid-template-columns: 1fr; }
     .source-grid { grid-template-columns: repeat(2, 1fr); }
   }
@@ -1158,23 +972,16 @@
     .bento .card { grid-column: span 12; }
     .demo { flex-direction: column; align-items: flex-start; gap: 18px; }
     .sd-ring { width: 108px; height: 108px; }
-    .win-grid { grid-template-columns: repeat(2, 1fr); }
-    .win-grid .mc:nth-child(n + 5) { display: none; }
-    .float-card--a { top: -20px; right: 4px; }
-    .float-card--b { display: none; }
     .hero__actions .btn { flex: 1; }
-    .cmd-row { grid-template-columns: 1fr; gap: 2px; }
     .source-grid { grid-template-columns: 1fr 1fr; }
     .finale__actions .btn { width: 100%; }
   }
 
   @media (max-width: 600px) {
-    .float-card { display: none; }
   }
 
   @media (max-width: 440px) {
     .brand small { display: none; }
-    .win-chips .chip:nth-child(n + 4) { display: none; }
     .source-grid { grid-template-columns: 1fr; }
   }
 
@@ -1187,6 +994,9 @@
     }
     [data-reveal] { opacity: 1; transform: none; }
   }
+  /* GitHub 入口 */
+  a.icon-btn { color: var(--muted); text-decoration: none; }
+  a.icon-btn:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -1206,11 +1016,15 @@
     </a>
     <nav class="nav__links" aria-label="页面导航">
       <a href="#features">功能</a>
+      <a href="#screens">界面</a>
       <a href="#sync">同步</a>
       <a href="#stack">技术栈</a>
-      <a href="#start">开始使用</a>
+      <a href="#themes">主题</a>
     </nav>
     <div class="nav__right">
+      <a class="icon-btn" href="https://github.com/Robin-zero/Catch-Up" target="_blank" rel="noreferrer" aria-label="GitHub 仓库" title="GitHub 仓库">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.2a9.8 9.8 0 0 0-3.1 19.1c.5.1.7-.2.7-.5v-1.8c-2.7.6-3.3-1.2-3.3-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.2-4.5-1.1-4.5-4.9 0-1.1.4-2 1-2.7-.1-.2-.4-1.3.1-2.6 0 0 .8-.3 2.7 1a9.3 9.3 0 0 1 4.9 0c1.9-1.3 2.7-1 2.7-1 .5 1.3.2 2.4.1 2.6.6.7 1 1.6 1 2.7 0 3.8-2.3 4.7-4.5 4.9.3.3.7.9.7 1.8v2.7c0 .3.2.6.7.5A9.8 9.8 0 0 0 12 2.2Z"/></svg>
+      </a>
       <button class="icon-btn" id="themeToggle" type="button" aria-label="切换深浅色主题" title="切换深浅色主题">
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
           <circle cx="12" cy="12" r="4.2" />
@@ -1220,7 +1034,7 @@
           <path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.7 6.7 0 0 0 10.7 10.7Z" />
         </svg>
       </button>
-      <a class="btn btn--primary btn--sm" href="#start">开始使用</a>
+      <a class="btn btn--primary btn--sm" href="https://github.com/Robin-zero/Catch-Up/releases" target="_blank" rel="noreferrer">下载</a>
     </div>
   </div>
 </header>
@@ -1230,7 +1044,7 @@
   <section class="hero" id="top">
     <div class="wrap hero__grid">
       <div>
-        <span class="eyebrow" data-reveal><i></i>本地优先 · 无账号 · 桌面端 + 浏览器</span>
+        <span class="eyebrow" data-reveal><i></i>本地优先 · 无账号 · 桌面端 + 移动端</span>
         <h1 data-reveal style="--d:.06s">
           <span>把每一部在追的故事，</span>
           <span class="grad">收进一条进度线。</span>
@@ -1240,11 +1054,11 @@
           都收在一个安静的内容库里。<strong>数据默认只留在你自己的设备上。</strong>
         </p>
         <div class="hero__actions" data-reveal style="--d:.18s">
-          <a class="btn btn--primary" href="#start">
-            查看启动方式
+          <a class="btn btn--primary" href="#screens">
+            看看界面
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg>
           </a>
-          <a class="btn btn--ghost" href="#features">浏览功能</a>
+          <a class="btn btn--ghost" href="#themes">深浅色对比</a>
         </div>
         <div class="hero__meta" data-reveal style="--d:.24s">
           <span>
@@ -1259,87 +1073,22 @@
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.2" y="3.2" width="11.6" height="7" rx="1.6"/><path d="M5.6 13h4.8"/></svg>
             浅色 / 深色 / 跟随系统
           </span>
+          <span>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.4" y="2.2" width="7.2" height="11.6" rx="1.8"/><path d="M7 11.6h2"/></svg>
+            Windows / macOS / Android / iOS
+          </span>
         </div>
       </div>
 
       <div class="hero-visual" data-reveal style="--d:.16s">
         <div class="halo" aria-hidden="true"></div>
         <div class="window-parallax" id="parallax">
-          <div class="window" role="img" aria-label="追更应用界面示意：内容库网格、筛选栏与同步状态">
-            <div class="win-bar">
-              <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
-              <span class="win-title">追更 · CatchUp</span>
-              <span class="win-sync"><i class="pulse-dot" aria-hidden="true"></i>已同步 21:40</span>
-            </div>
-            <div class="win-top">
-              <span class="win-brand">
-                <svg viewBox="0 0 32 32" aria-hidden="true">
-                  <circle cx="16" cy="16" r="11.4" fill="none" stroke="currentColor" stroke-width="2.4" opacity="0.2" />
-                  <path d="M27.4 16A11.4 11.4 0 1 1 16 4.6" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" />
-                  <path d="m11.4 16.2 3.5 3.5 8.2-8.6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                内容库 <b>12</b>
-              </span>
-              <span class="win-search">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3"/></svg>
-                搜索标题、平台…
-              </span>
-              <span class="win-add">＋ 添加</span>
-            </div>
-            <div class="win-chips" aria-hidden="true">
-              <span class="chip chip--on">全部</span>
-              <span class="chip">剧集</span>
-              <span class="chip">番剧</span>
-              <span class="chip">综艺</span>
-              <span class="chip">电影</span>
-              <span class="chip">短剧</span>
-              <span class="win-sort">最近更新 ▾</span>
-            </div>
-            <div class="win-grid">
-              <article class="mc">
-                <div class="mc-cover cover--1"><span class="mc-type">剧集</span><span class="mc-season">S2</span><span class="mc-title">深海回声</span></div>
-                <div class="mc-meta"><span>8 / 12 集</span><span class="mc-status">在追</span></div>
-                <div class="mc-bar"><i style="--p:67%"></i></div>
-              </article>
-              <article class="mc">
-                <div class="mc-cover cover--2"><span class="mc-type">电影</span><span class="mc-season">2025</span><span class="mc-title">第七封信</span></div>
-                <div class="mc-meta"><span>已看完</span><span class="mc-status" data-s="已完成">已完成</span></div>
-                <div class="mc-bar"><i style="--p:100%"></i></div>
-              </article>
-              <article class="mc">
-                <div class="mc-cover cover--3"><span class="mc-type">番剧</span><span class="mc-season">S1</span><span class="mc-title">星轨列车</span></div>
-                <div class="mc-meta"><span>5 / 24 集</span><span class="mc-status">在追</span></div>
-                <div class="mc-bar"><i style="--p:21%"></i></div>
-              </article>
-              <article class="mc">
-                <div class="mc-cover cover--4"><span class="mc-type">综艺</span><span class="mc-season">S4</span><span class="mc-title">周末厨房</span></div>
-                <div class="mc-meta"><span>3 / 10 期</span><span class="mc-status">在追</span></div>
-                <div class="mc-bar"><i style="--p:30%"></i></div>
-              </article>
-              <article class="mc">
-                <div class="mc-cover cover--5"><span class="mc-type">短剧</span><span class="mc-season">全 24</span><span class="mc-title">雨夜来客</span></div>
-                <div class="mc-meta"><span>0 / 24 集</span><span class="mc-status" data-s="待看">待看</span></div>
-                <div class="mc-bar"><i style="--p:0%"></i></div>
-              </article>
-              <article class="mc">
-                <div class="mc-cover cover--6"><span class="mc-type">剧集</span><span class="mc-season">S1</span><span class="mc-title">山中邮局</span></div>
-                <div class="mc-meta"><span>10 / 10 集</span><span class="mc-status" data-s="已完成">已完成</span></div>
-                <div class="mc-bar"><i style="--p:100%"></i></div>
-              </article>
-            </div>
-            <div class="win-foot">
-              <span>共 12 条 · 在追 3 · 已完成 7</span>
-              <span class="win-foot-right"><i class="pulse-dot" aria-hidden="true"></i>已同步</span>
+          <div class="phone hero-phone">
+            <div class="phone__screen">
+              <span class="phone__island" aria-hidden="true"></span>
+              <img src="assets/screenshots/library.png" alt="追更 Android 端内容库：条目卡片、进度条、筛选与底部标签栏" width="1080" height="2208" />
             </div>
           </div>
-        </div>
-        <div class="float-card float-card--a" aria-hidden="true">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V3.6M5 6.4 8 3.4l3 3"/><path d="M3 12.2h10"/></svg>
-          <span>本次同步上传 <b>2</b> 张封面</span>
-        </div>
-        <div class="float-card float-card--b" aria-hidden="true">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h10M5.6 5V3.6h4.8V5M4.2 5l.7 7.2h6.2L11.8 5"/></svg>
-          <span>回收站保留 <b>3</b> 条</span>
         </div>
       </div>
     </div>
@@ -1485,6 +1234,102 @@
   </section>
 
   <!-- 同步 -->
+  <!-- 界面截图 -->
+  <!-- 界面截图 -->
+  <section class="section" id="screens">
+    <div class="wrap">
+      <div class="section-head" data-reveal>
+        <span class="kicker">Screens</span>
+        <h2>手机和桌面，是同一条进度线</h2>
+        <p>截图来自实际运行的客户端（Android 1080 × 2340、桌面 1423 × 860），只去掉了系统状态栏与窗口边框，界面本身未做修饰。</p>
+      </div>
+
+      <div class="phones">
+        <figure class="phone-figure" data-reveal>
+          <div class="phone">
+            <div class="phone__screen">
+              <span class="phone__island" aria-hidden="true"></span>
+              <img src="assets/screenshots/library.png" alt="追更 Android 端内容库列表：条目卡片、进度条、状态标签与底部导航" width="1080" height="2208" loading="lazy" decoding="async" />
+            </div>
+          </div>
+          <figcaption><b>内容库</b> · 进度、状态与评分一屏读完</figcaption>
+        </figure>
+        <figure class="phone-figure" data-reveal style="--d:.08s">
+          <div class="phone">
+            <div class="phone__screen">
+              <span class="phone__island" aria-hidden="true"></span>
+              <img src="assets/screenshots/entry-form.png" alt="添加条目弹窗：类型、当前进度、总进度、季与状态，键盘弹出时按钮仍完整可见" width="1080" height="2211" loading="lazy" decoding="async" />
+            </div>
+          </div>
+          <figcaption><b>添加条目</b> · 底部抽屉，键盘不遮挡操作区</figcaption>
+        </figure>
+        <figure class="phone-figure" data-reveal style="--d:.16s">
+          <div class="phone">
+            <div class="phone__screen">
+              <span class="phone__island" aria-hidden="true"></span>
+              <img src="assets/screenshots/settings.png" alt="设置页：主题、TMDB API Key、AI 补全与 WebDAV" width="1080" height="2208" loading="lazy" decoding="async" />
+            </div>
+          </div>
+          <figcaption><b>设置</b> · 主题、TMDB、AI 补全与 WebDAV</figcaption>
+        </figure>
+      </div>
+
+      <figure class="desktop-figure" data-reveal>
+        <img src="assets/screenshots/desktop-light.png" alt="桌面端内容库：左侧分类、整行进度步进、标记完成与编辑" width="1423" height="860" loading="lazy" decoding="async" />
+        <figcaption><b>桌面端</b> · 左侧按状态与类型分类，右侧整行完成步进、标记与编辑</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 深浅色对比 -->
+  <section class="section" id="themes">
+    <div class="wrap">
+      <div class="section-head" data-reveal>
+        <span class="kicker">Themes</span>
+        <h2>深色，还是浅色</h2>
+        <p>同一块界面、同一份数据，只有配色不同。斜线右侧是深色模式，分割线会缓慢呼吸。</p>
+      </div>
+
+      <figure class="theme-compare" data-reveal>
+        <div class="compare compare--desktop">
+          <img class="compare__img" src="assets/screenshots/desktop-light.png" alt="桌面端浅色模式" width="1423" height="860" loading="lazy" decoding="async" />
+          <div class="compare__dark">
+            <img src="assets/screenshots/desktop-dark.png" alt="桌面端深色模式" width="1423" height="860" loading="lazy" decoding="async" />
+          </div>
+          <span class="compare__seam" aria-hidden="true"></span>
+        </div>
+        <figcaption class="theme-compare__legend">
+          <span><i class="legend-dot legend-dot--light"></i>浅色（左）</span>
+          <span><i class="legend-dot legend-dot--dark"></i>深色（右）</span>
+          <span class="theme-compare__hint">分割线每 12 秒缓慢往返</span>
+        </figcaption>
+      </figure>
+
+      <div class="themes-phone">
+        <div class="phone" data-reveal>
+          <div class="phone__screen">
+            <span class="phone__island" aria-hidden="true"></span>
+            <div class="compare">
+              <img class="compare__img" src="assets/screenshots/library.png" alt="手机端浅色模式" width="1080" height="2208" loading="lazy" decoding="async" />
+              <div class="compare__dark">
+                <img src="assets/screenshots/mobile-dark.png" alt="手机端深色模式" width="1080" height="2208" loading="lazy" decoding="async" />
+              </div>
+              <span class="compare__seam" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+        <div data-reveal style="--d:.08s">
+          <h3>三种主题，一种排版</h3>
+          <p>浅色、深色、跟随系统。切换只改配色变量，布局与触控目标保持不变；手机端还会跟着系统状态栏和软键盘自动让位。</p>
+          <div class="rule">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 11.4a3.4 3.4 0 0 0 0-6.8v6.8Z"/></svg>
+            <span>斜线右侧为深色模式；分割线每 12 秒在两侧之间缓慢往返一次。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="section" id="sync">
     <div class="wrap">
       <div class="section-head" data-reveal>
@@ -1590,73 +1435,6 @@
     </div>
   </section>
 
-  <!-- 开始使用 -->
-  <section class="section" id="start">
-    <div class="wrap">
-      <div class="section-head" data-reveal>
-        <span class="kicker">Get Started</span>
-        <h2>两条命令，跑起来看看</h2>
-        <p>需要 Node.js 与 Rust 环境。桌面模式会先启动 Vite，再由 Tauri 打开原生窗口。</p>
-      </div>
-
-      <div class="start-grid">
-        <div data-reveal>
-          <h3 style="font-size:18px">快捷键</h3>
-          <p style="margin:8px 0 0;font-size:13.5px;color:var(--muted)">常用动作都留了键盘入口，双手不用离开键盘。</p>
-          <div class="kbd-row">
-            <span class="kbd-item"><kbd>Ctrl</kbd><kbd>N</kbd>新建条目</span>
-            <span class="kbd-item"><kbd>Ctrl</kbd><kbd>F</kbd>聚焦搜索</span>
-            <span class="kbd-item"><kbd>Esc</kbd>关闭对话框</span>
-          </div>
-
-          <div class="cmd-table" role="table" aria-label="常用命令">
-            <div class="cmd-row" role="row"><code role="cell">npm run dev</code><span role="cell">浏览器模式，端口 14200</span></div>
-            <div class="cmd-row" role="row"><code role="cell">npm run dev:desktop</code><span role="cell">桌面端开发与热更新</span></div>
-            <div class="cmd-row" role="row"><code role="cell">npm run build</code><span role="cell">构建前端静态资源</span></div>
-            <div class="cmd-row" role="row"><code role="cell">npm run typecheck</code><span role="cell">TypeScript 类型检查</span></div>
-            <div class="cmd-row" role="row"><code role="cell">npm test</code><span role="cell">运行 Vitest 测试</span></div>
-          </div>
-        </div>
-
-        <div data-reveal style="--d:.1s">
-          <div class="code-card">
-            <div class="code-card__head">
-              <b>桌面端（推荐）</b>
-              <button class="copy-btn" type="button" data-copy="cmd-desktop">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="8.6" height="8.6" rx="1.8"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5"/></svg>
-                <span>复制</span>
-              </button>
-            </div>
-            <pre id="cmd-desktop"><span class="c"># 安装依赖</span>
-npm install
-
-<span class="c"># 打开桌面窗口</span>
-npm run <span class="k">dev:desktop</span></pre>
-          </div>
-
-          <div class="code-card">
-            <div class="code-card__head">
-              <b>浏览器预览</b>
-              <button class="copy-btn" type="button" data-copy="cmd-web">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="8.6" height="8.6" rx="1.8"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5"/></svg>
-                <span>复制</span>
-              </button>
-            </div>
-            <pre id="cmd-web"><span class="c"># 启动开发服务器</span>
-npm run <span class="k">dev</span>
-
-<span class="c"># 打开 http://localhost:14200</span></pre>
-          </div>
-
-          <div class="rule" style="margin-top:16px">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.9v.2"/></svg>
-            <span>浏览器模式用于预览界面与流程；WebDAV 同步与本地文件能力请使用桌面端。</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- 结尾 -->
   <section class="finale">
     <div class="wrap">
@@ -1668,8 +1446,8 @@ npm run <span class="k">dev</span>
       <h2 data-reveal>下一集，接着看。</h2>
       <p data-reveal style="--d:.06s">没有账号，没有广告，没有需要维护的清单。只有你自己的进度，安安静静地留在设备上。</p>
       <div class="finale__actions" data-reveal style="--d:.12s">
-        <a class="btn btn--primary" href="#start">开始使用</a>
-        <a class="btn btn--ghost" href="../README.md">阅读 README</a>
+        <a class="btn btn--primary" href="https://github.com/Robin-zero/Catch-Up/releases" target="_blank" rel="noreferrer">下载安装包</a>
+        <a class="btn btn--ghost" href="https://github.com/Robin-zero/Catch-Up" target="_blank" rel="noreferrer">GitHub 仓库</a>
       </div>
     </div>
   </section>
@@ -1687,10 +1465,12 @@ npm run <span class="k">dev</span>
     </span>
     <nav aria-label="页脚导航">
       <a href="#features">功能</a>
+      <a href="#screens">界面</a>
       <a href="#sync">同步</a>
       <a href="#stack">技术栈</a>
-      <a href="#start">开始使用</a>
-      <a href="../README.md">README</a>
+      <a href="#themes">主题</a>
+      <a href="https://github.com/Robin-zero/Catch-Up" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/Robin-zero/Catch-Up/releases" target="_blank" rel="noreferrer">下载</a>
     </nav>
     <span>数据默认只留在你的设备上。</span>
   </div>
@@ -1864,43 +1644,6 @@ npm run <span class="k">dev</span>
   if (minus) minus.addEventListener("click", function () { current = Math.max(0, current - 1); renderProgress(); });
   renderProgress();
 
-  /* 复制命令 */
-  document.querySelectorAll("[data-copy]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var target = document.getElementById(button.getAttribute("data-copy"));
-      if (!target) return;
-      var text = target.innerText.replace(/\u00a0/g, " ");
-      var done = function () {
-        var label = button.querySelector("span");
-        if (label) {
-          var original = label.textContent;
-          label.textContent = "已复制";
-          button.classList.add("is-done");
-          window.setTimeout(function () {
-            label.textContent = original;
-            button.classList.remove("is-done");
-          }, 1600);
-        }
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text, done); });
-      } else {
-        fallbackCopy(text, done);
-      }
-    });
-  });
-
-  function fallbackCopy(text, done) {
-    var area = document.createElement("textarea");
-    area.value = text;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    try { document.execCommand("copy"); done(); } catch (e) {}
-    document.body.removeChild(area);
-  }
 })();
 </script>
 

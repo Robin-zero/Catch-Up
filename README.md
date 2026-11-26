@@ -12,13 +12,32 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.77.2%2B-000000?logo=rust&logoColor=white" />
   <img alt="SQLite" src="https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-1c8a5d" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/Robin-zero/Catch-Up">GitHub 仓库</a>
+  ·
+  <a href="https://github.com/Robin-zero/Catch-Up/releases">下载安装包</a>
 </p>
 
 追更 CatchUp 是一个**本地优先**的观看与阅读进度记录器。剧集、番剧、综艺、电影、短剧——更新到第几集、看到哪一季、值不值得继续追，都收在一个安静的内容库里。
 
-桌面端使用 SQLite 保存数据、可选的 WebDAV 做多设备同步；浏览器模式使用 localStorage 作为轻量预览。没有账号体系，数据默认只留在你自己的设备上。
+桌面端与移动端使用 SQLite 保存数据、可选的 WebDAV 做多设备同步；浏览器模式使用 localStorage 作为轻量预览。没有账号体系，数据默认只留在你自己的设备上。
 
 > 打开 [项目介绍页](docs/index.html) 查看完整的视觉与交互演示。
+
+## 界面预览
+
+以下截图来自实际运行的客户端，仅去掉了系统状态栏与窗口边框：
+
+<p align="center">
+  <img src="docs/assets/screenshots/library.png" width="240" alt="内容库列表：条目、进度与筛选" />
+  &nbsp;
+  <img src="docs/assets/screenshots/entry-form.png" width="240" alt="添加条目：底部抽屉与键盘" />
+  &nbsp;
+  <img src="docs/assets/screenshots/settings.png" width="240" alt="设置：主题、TMDB、AI 补全与 WebDAV" />
+</p>
 
 ## 功能
 
@@ -54,9 +73,22 @@
 **体验**
 
 - 浅色 / 深色 / 跟随系统三种主题，启动前预判主题，避免白屏闪烁。
-- 响应式布局：桌面端顶栏按功能分组右对齐，窄屏自动重排为三行。
+- 响应式布局：桌面端顶栏按功能分组右对齐，窄屏自动重排为三行，并适配系统状态栏与软键盘。
 - `Ctrl/⌘ + N` 新建条目，`Ctrl/⌘ + F` 聚焦搜索，`Esc` 关闭对话框。
-- Tauri 2 打包 Windows / macOS / Linux，同时保留 Android / iOS 工程脚本。
+- Tauri 2 打包 Windows / macOS / Android / iOS；推送 `v*` 标签后由 GitHub Actions 自动产出四平台安装包。
+
+## 下载与发布
+
+安装包发布在 [GitHub Releases](https://github.com/Robin-zero/Catch-Up/releases)。推送 `v*` 标签（如 `v1.0.0`）时，[release.yml](.github/workflows/release.yml) 会自动构建：
+
+| 平台 | 产物 |
+| --- | --- |
+| Windows | `.msi` 与 NSIS `-setup.exe` |
+| macOS | 通用架构 `.dmg`（arm64 + x64） |
+| Android | 通用 `.apk`，使用仓库 Secrets 中的 keystore 签名 |
+| iOS | `.ipa`，需要 Apple 证书与描述文件，未配置时自动跳过 |
+
+也可以在 Actions 页面手动运行该 workflow，只构建并上传产物、不创建 Release。
 
 ## 技术栈
 
@@ -77,6 +109,7 @@
 - Node.js 20.19+（Vite 7 要求）
 - Rust 1.77.2+
 - Tauri 对应的系统依赖：Windows 需要 WebView2 与 MSVC 构建工具；macOS 需要 Xcode Command Line Tools；Linux 需要 WebKitGTK 等。详见 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+- 移动端：Android 需要 Android SDK、NDK 与 JDK 17；iOS 需要 macOS、Xcode 及可用的签名配置。
 
 ### 桌面端开发
 
@@ -97,8 +130,12 @@ npm run dev
 ### 打包
 
 ```bash
-npm run build:desktop
+npm run build:desktop            # 当前平台桌面安装包
+npm run build:android -- --apk   # Android 通用 APK（自动写入签名配置）
+npm run build:ios                # iOS 包（macOS + Xcode）
 ```
+
+Android 签名信息来自本地 `~/.catchup-keystore/signing.properties`（keystore 与密码不入库），`npm run build:android` 会先执行 `scripts/android-signing.ps1` 生成 `keystore.properties` 并补丁 Gradle 签名配置；CI 中使用仓库 Secrets，清单见 [release.yml](.github/workflows/release.yml) 顶部注释。
 
 ## 常用命令
 
@@ -108,6 +145,8 @@ npm run build:desktop
 | `npm run dev:desktop` | 启动 Tauri 桌面端开发 |
 | `npm run build` | 类型检查并构建前端资源 |
 | `npm run build:desktop` | 打包桌面安装包 |
+| `npm run build:android -- --apk` | 构建已签名 Android 通用 APK |
+| `npm run build:ios` | 构建 iOS 包（需 macOS + Xcode） |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm run lint` | ESLint（零警告） |
 | `npm test` | 运行前端测试 |
@@ -152,6 +191,7 @@ npm run build:desktop
 
 ```text
 catch-up/
+├─ .github/workflows/release.yml # 四平台自动构建与发布
 ├─ src/                       # React 前端
 │  ├─ App.tsx                 # 主界面、状态与交互
 │  ├─ api.ts                  # Tauri 命令与浏览器实现的统一入口
@@ -167,10 +207,14 @@ catch-up/
 │  │  ├─ ai.rs                # OpenAI 兼容补全
 │  │  ├─ excel.rs             # Excel 导入导出
 │  │  └─ cover.rs             # 封面落盘
+│  ├─ gen/android/            # Android 工程（含签名补丁与原生 insets 适配）
 │  ├─ capabilities/           # Tauri 权限
 │  └─ tauri.conf.json
 ├─ public/                    # favicon
-├─ docs/index.html            # 项目介绍页
+├─ docs/
+│  ├─ index.html              # 项目介绍页
+│  └─ assets/screenshots/     # 介绍页与 README 使用的实机截图
+├─ scripts/android-signing.ps1 # Android release 签名配置（幂等）
 ├─ app-icon.svg               # 应用图标源文件
 └─ README.md
 ```

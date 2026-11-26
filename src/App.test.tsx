@@ -310,8 +310,8 @@ describe("内容库", () => {
       name: "内容库摘要",
     });
     expect(summary).toHaveTextContent("条目总数3项");
-    expect(summary).toHaveTextContent("正在追更2项在追");
-    expect(summary).toHaveTextContent("已经看完1项完成");
+    expect(summary).toHaveTextContent("正在追更2项");
+    expect(summary).toHaveTextContent("已经看完1项");
   });
 
   it("按照后端返回顺序展示条目", async () => {
@@ -398,8 +398,8 @@ describe("快捷进度操作", () => {
         .map((article) => within(article).getByRole("heading").textContent),
     ).toEqual([target.title, other.title]);
     const summary = screen.getByRole("region", { name: "内容库摘要" });
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完1项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完1项");
   });
 
   it("减一使用后端结果恢复在追，保留对应进度", async () => {
@@ -602,8 +602,8 @@ describe("快捷进度操作", () => {
       }),
     ).toBeEnabled();
     const summary = screen.getByRole("region", { name: "内容库摘要" });
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完0项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完0项");
   });
 
   it("逐条目防止连点并禁用相关写操作，同时允许其他条目更新", async () => {
@@ -863,8 +863,8 @@ describe("搜索与筛选", () => {
     expect(screen.queryByRole("list", { name: "追更内容列表" })).toBeNull();
     const summary = screen.getByRole("region", { name: "内容库摘要" });
     expect(summary).toHaveTextContent("条目总数3项");
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完2项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完2项");
 
     await user.click(
       screen.getByRole("button", { name: "重置搜索和筛选" }),
@@ -926,8 +926,8 @@ describe("搜索与筛选", () => {
     expect(screen.getByLabelText("状态筛选")).toHaveValue("tracking");
     const summary = screen.getByRole("region", { name: "内容库摘要" });
     expect(summary).toHaveTextContent("条目总数3项");
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完2项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完2项");
 
     await user.selectOptions(screen.getByLabelText("状态筛选"), "all");
     expectVisibleTitles([target.title, other.title, completed.title]);
@@ -1029,8 +1029,8 @@ describe("条目管理", () => {
     });
     const summary = screen.getByRole("region", { name: "内容库摘要" });
     expect(summary).toHaveTextContent("条目总数2项");
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完1项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完1项");
   });
 
   it("保存时先把远程封面缓存到本地", async () => {
@@ -1136,8 +1136,8 @@ describe("条目管理", () => {
       articles.map((article) => within(article).getByRole("heading").textContent),
     ).toEqual([updated.title, other.title]);
     const summary = screen.getByRole("region", { name: "内容库摘要" });
-    expect(summary).toHaveTextContent("正在追更1项在追");
-    expect(summary).toHaveTextContent("已经看完1项完成");
+    expect(summary).toHaveTextContent("正在追更1项");
+    expect(summary).toHaveTextContent("已经看完1项");
     expect(
       screen.getByRole("button", { name: `编辑《${updated.title}》` }),
     ).toHaveFocus();
@@ -1306,8 +1306,8 @@ describe("条目管理", () => {
     expect(screen.getByRole("article", { name: other.title })).toBeVisible();
     const summary = screen.getByRole("region", { name: "内容库摘要" });
     expect(summary).toHaveTextContent("条目总数1项");
-    expect(summary).toHaveTextContent("正在追更0项在追");
-    expect(summary).toHaveTextContent("已经看完1项完成");
+    expect(summary).toHaveTextContent("正在追更0项");
+    expect(summary).toHaveTextContent("已经看完1项");
     expect(screen.getByRole("button", { name: "添加条目" })).toHaveFocus();
   });
 

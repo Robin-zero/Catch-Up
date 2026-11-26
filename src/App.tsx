@@ -10,6 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { createPortal } from "react-dom";
 import {
   adjustProgress,
   aiScrape,
@@ -399,7 +400,7 @@ interface DialogProps {
   titleId: string;
   busy?: boolean;
   active?: boolean;
-  initialFocusRef: RefObject<HTMLElement | null>;
+  initialFocusRef?: RefObject<HTMLElement | null>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
@@ -433,7 +434,11 @@ function Dialog({
         ? document.activeElement
         : null;
     const fallbackFocus = fallbackFocusRef?.current;
-    initialFocusRef.current?.focus();
+    if (initialFocusRef?.current) {
+      initialFocusRef.current.focus();
+    } else {
+      dialogRef.current?.focus();
+    }
 
     return () => {
       if (previouslyFocused?.isConnected) {
@@ -491,7 +496,7 @@ function Dialog({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [busy, active]);
 
-  return (
+  return createPortal(
     <div
       className="dialog-backdrop"
       inert={!active}
@@ -507,6 +512,7 @@ function Dialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         ref={dialogRef}
       >
         <span className="dialog__grabber" aria-hidden="true" />
@@ -526,7 +532,8 @@ function Dialog({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1982,7 +1989,6 @@ function SettingsDialog({
       title="设置"
       titleId={titleId}
       busy={saving}
-      initialFocusRef={apiKeyRef}
       fallbackFocusRef={fallbackFocusRef}
       onClose={onClose}
       className="dialog--settings"
@@ -2844,12 +2850,12 @@ function SummaryStrip({ entries }: { entries: MediaEntry[] }) {
       <div className="summary-strip__item summary-strip__item--tracking">
         <span className="summary-strip__label">正在追更</span>
         <strong className="summary-strip__value">{trackingCount}</strong>
-        <span className="summary-strip__suffix">项在追</span>
+        <span className="summary-strip__suffix">项</span>
       </div>
       <div className="summary-strip__item summary-strip__item--completed">
         <span className="summary-strip__label">已经看完</span>
         <strong className="summary-strip__value">{completedCount}</strong>
-        <span className="summary-strip__suffix">项完成</span>
+        <span className="summary-strip__suffix">项</span>
       </div>
     </section>
   );
@@ -2994,7 +3000,6 @@ function EntryRow({
                 <span className="entry__platform">{entry.platform}</span>
               </>
             ) : null}
-            <span className="entry__dot" aria-hidden="true">·</span>
             <time className="entry__time" dateTime={entry.updatedAt}>
               更新于 {updatedAtFormatter.format(new Date(entry.updatedAt))}
             </time>
@@ -3937,6 +3942,14 @@ function App() {
                 onClick={() => setSettingsOpen(true)}
               >
                 <span className="sync-chip__dot" aria-hidden="true" />
+                <svg
+                  className="sync-chip__icon"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path d="M6.3 14.6h7.9a3.3 3.3 0 0 0 .3-6.6 4.4 4.4 0 0 0-8.4-.6 3.6 3.6 0 0 0 .2 7.2Z" />
+                </svg>
                 <span className="sync-chip__label">{syncLabel}</span>
               </button>
               {!isTrashView ? (
@@ -3949,7 +3962,17 @@ function App() {
                   aria-label={selecting ? "退出批量删除" : "批量删除"}
                   onClick={toggleSelecting}
                 >
-                  {selecting ? "退出批量" : "批量删除"}
+                  <svg
+                    className="batch-toggle__icon"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 5.4l1.7 1.7L8 3.7M3 13.6l1.7 1.7L8 11.9M11 6h6M11 14.2h6" />
+                  </svg>
+                  <span className="batch-toggle__label">
+                    {selecting ? "退出批量" : "批量删除"}
+                  </span>
                 </button>
               ) : null}
 
@@ -4190,6 +4213,19 @@ function App() {
             <path d="m8.5 12 2.6 2.6 4.6-5" />
           </svg>
           <span>已完成</span>
+        </button>
+        <button
+          className="tabbar__item"
+          type="button"
+          aria-pressed={view === "trash"}
+          onClick={() => setView("trash")}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6.5h16M9.5 4h5" />
+            <path d="M6.8 6.5h10.4l-.8 12.4a2 2 0 0 1-2 1.9H9.6a2 2 0 0 1-2-1.9L6.8 6.5Z" />
+            <path d="M10.4 10v6M13.6 10v6" />
+          </svg>
+          <span>回收站</span>
         </button>
       </nav>
 

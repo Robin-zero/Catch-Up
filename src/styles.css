@@ -195,6 +195,7 @@ svg {
 }
 
 :focus-visible {
+  outline: 2px solid var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 1px;
 }
@@ -216,7 +217,7 @@ svg {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  height: 100dvh;
+  height: 100vh;
   overflow: hidden;
   background: var(--bg);
 }
@@ -574,6 +575,7 @@ svg {
 }
 
 .search-field:focus-within {
+  border-color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   background: var(--surface);
 }
@@ -652,6 +654,10 @@ svg {
   background: var(--surface-muted);
 }
 
+.form-field .layout-toggle {
+  align-self: flex-start;
+}
+
 .layout-toggle__option {
   display: inline-flex;
   align-items: center;
@@ -698,6 +704,10 @@ svg {
 }
 
 .add-button span {
+  display: none;
+}
+
+.batch-toggle__icon {
   display: none;
 }
 
@@ -848,6 +858,7 @@ svg {
   justify-content: center;
   height: 28px;
   padding: 0 10px;
+  border: 1px solid var(--danger-soft);
   border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
   border-radius: 6px;
   background: var(--surface);
@@ -913,7 +924,6 @@ svg {
 .summary-strip {
   display: flex;
   align-items: baseline;
-  gap: 18px;
   padding: 2px 2px 9px;
   font-size: 11.5px;
   color: var(--text-tertiary);
@@ -923,7 +933,14 @@ svg {
 .summary-strip__item {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+}
+
+.summary-strip__item + .summary-strip__item {
+  margin-left: 16px;
+}
+
+.summary-strip__item > * + * {
+  margin-left: 4px;
 }
 
 .summary-strip__label {
@@ -1182,7 +1199,10 @@ svg {
 
 .entry-list--grid .entry__cover-backdrop {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 0;
   display: block;
   width: 100%;
@@ -1646,7 +1666,10 @@ kbd {
 
 .dialog-backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   z-index: 60;
   display: flex;
   align-items: center;
@@ -1660,7 +1683,7 @@ kbd {
 .dialog {
   display: flex;
   width: min(430px, 100%);
-  max-height: min(86dvh, 620px);
+  max-height: min(86vh, 620px);
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1668,6 +1691,10 @@ kbd {
   background: var(--surface);
   box-shadow: var(--shadow-pop);
   animation: dialog-in 0.14s ease;
+}
+
+.dialog:focus {
+  outline: none;
 }
 
 .dialog__grabber {
@@ -1694,6 +1721,8 @@ kbd {
 }
 
 .dialog__body {
+  min-height: 0;
+  flex: 1 1 auto;
   padding: 14px 15px;
   overflow-y: auto;
 }
@@ -1827,7 +1856,7 @@ kbd {
 
 .dialog--import {
   width: min(580px, 100%);
-  max-height: min(90dvh, 720px);
+  max-height: min(90vh, 720px);
 }
 
 .import-form {
@@ -2247,7 +2276,7 @@ kbd {
 
 .app-toast {
   position: fixed;
-  bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(78px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   z-index: 80;
   max-width: min(86vw, 420px);
@@ -2349,7 +2378,7 @@ kbd {
 
   .app-shell {
     display: block;
-    height: 100dvh;
+    height: 100vh;
   }
 
   .sidebar {
@@ -2358,7 +2387,7 @@ kbd {
 
   .app-main {
     height: 100%;
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(62px + env(safe-area-inset-bottom, 0px));
   }
 
   .topbar {
@@ -2367,8 +2396,9 @@ kbd {
       "title add"
       "search search"
       "filters filters";
-    gap: 8px;
-    padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 10px;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 12px;
+    background: var(--surface);
     background: color-mix(in srgb, var(--surface) 92%, transparent);
     backdrop-filter: blur(12px);
     position: sticky;
@@ -2378,31 +2408,98 @@ kbd {
 
   .filter-row {
     flex-wrap: wrap;
+    overflow: visible;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+
+  .filter-row .layout-toggle {
+    margin-left: auto;
+  }
+
+  button:focus {
+    outline: none;
   }
 
   .mobile-brand {
-    font-size: 15px;
+    min-width: 0;
+    gap: 8px;
+    font-size: 17px;
   }
 
-  .add-button {
-    width: 34px;
-    height: 34px;
+  .topbar__actions {
+    gap: 8px;
+  }
+
+  .primary-button.add-button {
+    width: 38px;
+    height: 38px;
     padding: 0;
-    border-radius: 8px;
+    border-radius: 10px;
   }
 
   .primary-button.add-button svg {
-    width: 18px;
-    height: 18px;
+    width: 19px;
+    height: 19px;
   }
 
   .topbar__sync-chip {
     display: inline-flex;
     flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 10px;
+    color: var(--text-secondary);
+  }
+
+  .topbar__sync-chip .sync-chip__label,
+  .topbar__sync-chip .sync-chip__dot {
+    display: none;
+  }
+
+  .topbar__sync-chip .sync-chip__icon {
+    display: block;
+    width: 19px;
+    height: 19px;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .sync-chip--error .sync-chip__icon {
+    color: var(--danger);
+  }
+
+  .ghost-button.batch-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 10px;
+  }
+
+  .batch-toggle__label {
+    display: none;
+  }
+
+  .batch-toggle__icon {
+    display: block;
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .dialog--settings {
-    max-height: 92dvh;
+    max-height: 92vh;
   }
 
   .settings-section__row {
@@ -2418,11 +2515,11 @@ kbd {
   }
 
   .scrape-results {
-    max-height: 46dvh;
+    max-height: 46vh;
   }
 
   .dialog--import {
-    max-height: 92dvh;
+    max-height: 92vh;
   }
 
   .dialog--import .dialog__body {
@@ -2476,18 +2573,47 @@ kbd {
   }
 
   .search-field {
-    height: 34px;
+    height: 40px;
+    gap: 8px;
+    padding: 0 12px;
+    border-radius: 10px;
+    background: var(--surface);
+  }
+
+  .search-field svg {
+    width: 15px;
+    height: 15px;
   }
 
   .search-field input {
-    font-size: 14px;
+    font-size: 15px;
   }
 
   .compact-select {
-    height: 30px;
+    flex: 0 0 auto;
+    height: 32px;
+    padding: 0 20px 0 8px;
     max-width: none;
-    flex: 1;
-    font-size: 12.5px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .filter-row .compact-select {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .layout-toggle {
+    flex: 0 0 auto;
+    height: 32px;
+    border-radius: 8px;
+  }
+
+  .layout-toggle__option {
+    height: 26px;
+    min-width: 0;
+    padding: 0 9px;
+    font-size: 11px;
   }
 
   .link-button {
@@ -2495,17 +2621,81 @@ kbd {
   }
 
   .app-content {
-    padding: 10px 12px 16px;
+    padding: 12px 14px 20px;
   }
 
   .summary-strip {
-    gap: 14px;
-    padding: 0 2px 10px;
+    padding: 0 2px 12px;
     font-size: 12px;
   }
 
+  .summary-strip__item + .summary-strip__item {
+    margin-left: 14px;
+  }
+
+  /* 老内核（Chromium < 84）不支持 flex gap，用 margin 兜底 */
+  .no-flex-gap .mobile-brand > * + * {
+    margin-left: 8px;
+  }
+
+  .no-flex-gap .search-field > * + * {
+    margin-left: 6px;
+  }
+
+  .no-flex-gap .filter-row > * + * {
+    margin-left: 6px;
+  }
+
+  .no-flex-gap .topbar__actions > * + * {
+    margin-left: 8px;
+  }
+
+  .no-flex-gap .entry__headline > * + * {
+    margin-left: 7px;
+  }
+
+  .no-flex-gap .entry__meta > * + * {
+    margin-left: 5px;
+  }
+
+  .no-flex-gap .entry__actions > * + * {
+    margin-left: 4px;
+  }
+
+  .no-flex-gap .entry__progress > * + * {
+    margin-left: 10px;
+  }
+
+  .no-flex-gap .entry__bar-row > * + * {
+    margin-left: 7px;
+  }
+
+  .no-flex-gap .tabbar__item > * + * {
+    margin-top: 4px;
+  }
+
+  .no-flex-gap .content-state > * + * {
+    margin-top: 6px;
+  }
+
+  .no-flex-gap .entry-form__fields > * + * {
+    margin-top: 14px;
+  }
+
+  .no-flex-gap .form-field > * + * {
+    margin-top: 6px;
+  }
+
+  .no-flex-gap .settings-section__fields > * + * {
+    margin-top: 10px;
+  }
+
+  .no-flex-gap .batch-bar > * + * {
+    margin-left: 10px;
+  }
+
   .entry-list {
-    gap: 8px;
+    gap: 10px;
   }
 
   .entry {
@@ -2514,9 +2704,10 @@ kbd {
       "tile body"
       "progress progress"
       "actions actions";
-    gap: 8px 10px;
-    padding: 12px;
-    border-radius: 11px;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(24, 30, 24, 0.04);
   }
 
   .entry--movie {
@@ -2587,9 +2778,10 @@ kbd {
   }
 
   .stepper__button {
-    width: 40px;
-    height: 34px;
-    font-size: 16px;
+    width: 38px;
+    height: 36px;
+    border-radius: 9px;
+    font-size: 17px;
   }
 
   .ghost-button {
@@ -2632,38 +2824,50 @@ kbd {
     left: 0;
     z-index: 40;
     display: flex;
-    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    height: calc(62px + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 96%, transparent);
     backdrop-filter: blur(14px);
   }
 
   .tabbar__item {
+    position: relative;
     display: flex;
     flex: 1;
     align-items: center;
     justify-content: center;
-    gap: 3px;
+    gap: 4px;
     border: 0;
     background: none;
     color: var(--text-tertiary);
     flex-direction: column;
-    font-size: 10.5px;
+    font-size: 11px;
+    transition: color 0.15s ease;
   }
 
   .tabbar__item svg {
-    width: 21px;
-    height: 21px;
+    width: 22px;
+    height: 22px;
     stroke: currentColor;
     stroke-width: 1.6;
     stroke-linecap: round;
     stroke-linejoin: round;
+    transition: stroke-width 0.15s ease;
   }
 
   .tabbar__item[aria-pressed="true"] {
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 650;
+  }
+
+  .tabbar__item[aria-pressed="true"] svg {
+    stroke-width: 2;
+  }
+
+  .tabbar__item:active {
+    opacity: 0.6;
   }
 
   .dialog-backdrop {
@@ -2674,7 +2878,7 @@ kbd {
 
   .dialog {
     width: 100%;
-    max-height: 90dvh;
+    max-height: 90vh;
     border: 0;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 40px rgba(20, 26, 20, 0.24);
@@ -2704,6 +2908,18 @@ kbd {
     padding: 14px 16px 18px;
   }
 
+  .entry-form__fields {
+    gap: 14px;
+  }
+
+  .entry-form__row {
+    gap: 12px;
+  }
+
+  .form-field {
+    gap: 6px;
+  }
+
   .dialog__description {
     font-size: 13px;
   }
@@ -2721,6 +2937,25 @@ kbd {
 
   .form-field label {
     font-size: 12.5px;
+  }
+
+  .form-field input,
+  .form-field select {
+    height: 40px;
+    padding: 0 11px;
+    border-radius: 9px;
+    font-size: 15px;
+  }
+
+  .form-field select {
+    padding-right: 28px;
+  }
+
+  .form-field textarea {
+    min-height: 78px;
+    padding: 10px 11px;
+    border-radius: 9px;
+    font-size: 15px;
   }
 
   .form-field input,

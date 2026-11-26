@@ -25,7 +25,7 @@
 
 桌面端与移动端使用 SQLite 保存数据、可选的 WebDAV 做多设备同步；浏览器模式使用 localStorage 作为轻量预览。没有账号体系，数据默认只留在你自己的设备上。
 
-> 打开 [项目介绍页](docs/index.html) 查看完整的视觉与交互演示。
+> 打开 [项目介绍页](https://robin-zero.github.io/Catch-Up/) 查看完整的视觉与交互演示。
 
 ## 界面预览
 

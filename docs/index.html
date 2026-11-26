@@ -802,7 +802,7 @@
     position: absolute;
     inset: 0;
     clip-path: polygon(60% 0, 100% 0, 100% 100%, 44% 100%);
-    animation: seam-desk 12s ease-in-out infinite alternate;
+    transition: clip-path 0.55s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .compare__dark img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .compare--desktop {
@@ -819,9 +819,26 @@
     background: linear-gradient(180deg, transparent, rgba(126, 226, 178, 0.9) 16%, rgba(126, 226, 178, 0.5) 84%, transparent);
     box-shadow: 0 0 16px rgba(126, 226, 178, 0.45);
     transform: translateX(-1px) rotate(14.5deg);
-    animation: seam-x 12s ease-in-out infinite alternate;
+    transition: left 0.55s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
     pointer-events: none;
   }
+  .compare__zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    z-index: 4;
+  }
+  .compare__zone--light { left: 0; }
+  .compare__zone--dark { right: 0; }
+  .compare__zone--light:hover ~ .compare__dark {
+    clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%);
+  }
+  .compare__zone--light:hover ~ .compare__seam { left: 100%; opacity: 0; }
+  .compare__zone--dark:hover ~ .compare__dark {
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  .compare__zone--dark:hover ~ .compare__seam { left: 0; opacity: 0; }
   .theme-compare { margin: 0; }
   .theme-compare__legend {
     display: flex;
@@ -854,34 +871,19 @@
   .themes-phone .compare { border-radius: 32px; }
   .themes-phone .compare__dark {
     clip-path: polygon(66% 0, 100% 0, 100% 100%, 30% 100%);
-    animation: seam-phone 12s ease-in-out infinite alternate;
   }
   .themes-phone .compare__seam {
     left: 48%;
     transform: translateX(-1px) rotate(10.5deg);
-    animation: seam-phone-x 12s ease-in-out infinite alternate;
   }
   .themes-phone h3 { font-size: 20px; margin-bottom: 10px; }
   .themes-phone p { color: var(--muted); font-size: 13.5px; line-height: 1.7; margin: 0 0 14px; }
-  @keyframes seam-desk {
-    from { clip-path: polygon(60% 0, 100% 0, 100% 100%, 44% 100%); }
-    to { clip-path: polygon(56% 0, 100% 0, 100% 100%, 40% 100%); }
-  }
-  @keyframes seam-x {
-    from { left: 52%; }
-    to { left: 48%; }
-  }
-  @keyframes seam-phone {
-    from { clip-path: polygon(66% 0, 100% 0, 100% 100%, 30% 100%); }
-    to { clip-path: polygon(62% 0, 100% 0, 100% 100%, 26% 100%); }
-  }
-  @keyframes seam-phone-x {
-    from { left: 48%; }
-    to { left: 44%; }
+  @media (max-width: 720px) {
+    .theme-compare__hint { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     .compare__dark,
-    .compare__seam { animation: none; }
+    .compare__seam { transition: none; }
   }
   @media (max-width: 900px) {
     .phones { grid-template-columns: minmax(0, 280px); justify-content: center; }
@@ -1233,15 +1235,13 @@
     </div>
   </section>
 
-  <!-- 同步 -->
-  <!-- 界面截图 -->
   <!-- 界面截图 -->
   <section class="section" id="screens">
     <div class="wrap">
       <div class="section-head" data-reveal>
         <span class="kicker">Screens</span>
         <h2>手机和桌面，是同一条进度线</h2>
-        <p>截图来自实际运行的客户端（Android 1080 × 2340、桌面 1423 × 860），只去掉了系统状态栏与窗口边框，界面本身未做修饰。</p>
+        <p>同一套界面：手机上紧凑，一屏看清进度；桌面上舒展，整行完成步进、标记与编辑。</p>
       </div>
 
       <div class="phones">
@@ -1287,11 +1287,13 @@
       <div class="section-head" data-reveal>
         <span class="kicker">Themes</span>
         <h2>深色，还是浅色</h2>
-        <p>同一块界面、同一份数据，只有配色不同。斜线右侧是深色模式，分割线会缓慢呼吸。</p>
+        <p>同一块界面、同一份数据，只有配色不同。</p>
       </div>
 
       <figure class="theme-compare" data-reveal>
         <div class="compare compare--desktop">
+          <span class="compare__zone compare__zone--light" aria-hidden="true"></span>
+          <span class="compare__zone compare__zone--dark" aria-hidden="true"></span>
           <img class="compare__img" src="assets/screenshots/desktop-light.png" alt="桌面端浅色模式" width="1423" height="860" loading="lazy" decoding="async" />
           <div class="compare__dark">
             <img src="assets/screenshots/desktop-dark.png" alt="桌面端深色模式" width="1423" height="860" loading="lazy" decoding="async" />
@@ -1299,9 +1301,9 @@
           <span class="compare__seam" aria-hidden="true"></span>
         </div>
         <figcaption class="theme-compare__legend">
-          <span><i class="legend-dot legend-dot--light"></i>浅色（左）</span>
-          <span><i class="legend-dot legend-dot--dark"></i>深色（右）</span>
-          <span class="theme-compare__hint">分割线每 12 秒缓慢往返</span>
+          <span><i class="legend-dot legend-dot--light"></i>浅色</span>
+          <span><i class="legend-dot legend-dot--dark"></i>深色</span>
+          <span class="theme-compare__hint">移到左侧或右侧即可查看</span>
         </figcaption>
       </figure>
 
@@ -1310,6 +1312,8 @@
           <div class="phone__screen">
             <span class="phone__island" aria-hidden="true"></span>
             <div class="compare">
+              <span class="compare__zone compare__zone--light" aria-hidden="true"></span>
+              <span class="compare__zone compare__zone--dark" aria-hidden="true"></span>
               <img class="compare__img" src="assets/screenshots/library.png" alt="手机端浅色模式" width="1080" height="2208" loading="lazy" decoding="async" />
               <div class="compare__dark">
                 <img src="assets/screenshots/mobile-dark.png" alt="手机端深色模式" width="1080" height="2208" loading="lazy" decoding="async" />
@@ -1319,11 +1323,11 @@
           </div>
         </div>
         <div data-reveal style="--d:.08s">
-          <h3>三种主题，一种排版</h3>
-          <p>浅色、深色、跟随系统。切换只改配色变量，布局与触控目标保持不变；手机端还会跟着系统状态栏和软键盘自动让位。</p>
+          <h3>两种配色，一套排版</h3>
+          <p>浅色、深色、跟随系统三选一。切换只改变配色，排版和按钮位置保持不变，进度、筛选和正在追的条目都不会丢。</p>
           <div class="rule">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 11.4a3.4 3.4 0 0 0 0-6.8v6.8Z"/></svg>
-            <span>斜线右侧为深色模式；分割线每 12 秒在两侧之间缓慢往返一次。</span>
+            <span>手机上同样支持深色模式，也可以跟随系统自动切换。</span>
           </div>
         </div>
       </div>

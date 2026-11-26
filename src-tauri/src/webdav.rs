@@ -686,6 +686,124 @@ async fn publish_local_covers(
     warnings
 }
 
+/// 快照里仍然被引用的远端封面名（封面标记）。
+fn collect_marker_names(entries: &[SyncEntry]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .cover_url
+                .as_deref()
+                .and_then(marked_cover_name)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// 仍然被条目引用的本地封面文件名。
+fn collect_local_cover_names(
+    entries: &[SyncEntry],
+    covers_directory: &Path,
+) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.cover_url.as_deref())
+        .filter(|value| {
+            !value.starts_with("http://")
+                && !value.starts_with("https://")
+                && marked_cover_name(value).is_none()
+        })
+        .filter_map(|value| {
+            Path::new(value)
+                .strip_prefix(covers_directory)
+                .ok()
+                .and_then(|relative| relative.file_name())
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn stale_remote_covers(
+    manifest: &CoverManifest,
+    covers_url: &str,
+    referenced: &BTreeSet<String>,
+) -> Vec<String> {
+    manifest
+        .uploaded
+        .get(covers_url)
+        .map(|names| {
+            names
+                .iter()
+                .filter(|name| !referenced.contains(*name))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn delete_cover(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    name: &str,
+) -> Result<u16, String> {
+    let mut request = client.delete(format!("{covers_url}/{name}"));
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_request_error(&error))?;
+    Ok(response.status().as_u16())
+}
+
+/// 删除不再被任何条目引用的旧封面：远端文件与本地缓存。
+async fn remove_stale_covers(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    covers_directory: &Path,
+    manifest: &mut CoverManifest,
+    referenced_remote: &BTreeSet<String>,
+    referenced_local: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for name in stale_remote_covers(manifest, covers_url, referenced_remote) {
+        match delete_cover(client, covers_url, settings, &name).await {
+            Ok(status) if (200..300).contains(&status) || status == 404 => {
+                if let Some(names) = manifest.uploaded.get_mut(covers_url) {
+                    names.remove(&name);
+                }
+            }
+            Ok(status) => warnings.push(format!("删除旧封面失败（HTTP {status}）：{name}")),
+            Err(error) => warnings.push(format!("{error}：{name}")),
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(covers_directory) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if referenced_local.contains(&name) {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Err(error) = std::fs::remove_file(&path) {
+                warnings.push(format!("删除本地旧封面失败：{name}（{error}）"));
+            }
+        }
+    }
+
+    warnings
+}
+
 pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<SyncReport, String> {
     // 同一时刻只允许一个同步过程，避免并发请求互相覆盖。
     static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -753,7 +871,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
     database.apply_sync_merge(&merge.entries, &merge.purged)?;
 
     let mut snapshot_entries = merge.entries;
-    let warnings = if let Some(covers_url) = covers_base.as_deref() {
+    let mut warnings = if let Some(covers_url) = covers_base.as_deref() {
         publish_local_covers(
             &client,
             covers_url,
@@ -778,6 +896,29 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
         purged: merge.purged,
     };
     put_snapshot(&client, &url, &settings, &snapshot, !explicit_file).await?;
+
+    // 快照写入成功后再清理旧封面，避免远端仍引用时先删了文件。
+    if let Some(covers_url) = covers_base.as_deref() {
+        let referenced_remote = collect_marker_names(&snapshot.entries);
+        // 用合并落库后的最新状态判断本地封面是否仍被引用，避免并发编辑时误删。
+        let (latest_entries, _) = database.read_sync_state()?;
+        let referenced_local = collect_local_cover_names(&latest_entries, &covers_directory);
+        warnings.extend(
+            remove_stale_covers(
+                &client,
+                covers_url,
+                &settings,
+                &covers_directory,
+                &mut manifest,
+                &referenced_remote,
+                &referenced_local,
+            )
+            .await,
+        );
+        if manifest != original_manifest {
+            let _ = save_cover_manifest(&manifest_path, &manifest);
+        }
+    }
 
     database.set_last_synced_at(&exported_at)?;
 
@@ -1108,6 +1249,43 @@ mod tests {
         assert_eq!(cover_content_type("cover-1.PNG"), "image/png");
         assert_eq!(cover_content_type("cover-1.webp"), "image/webp");
         assert_eq!(cover_content_type("cover-1"), "image/jpeg");
+    }
+
+    #[test]
+    fn stale_remote_covers_are_unreferenced_manifest_entries() {
+        let mut manifest = CoverManifest::default();
+        manifest
+            .uploaded
+            .entry("https://dav.example.com/covers".to_owned())
+            .or_default()
+            .extend(["a.jpg".to_owned(), "b.jpg".to_owned()]);
+        let referenced = BTreeSet::from(["a.jpg".to_owned()]);
+
+        assert_eq!(
+            stale_remote_covers(&manifest, "https://dav.example.com/covers", &referenced),
+            vec!["b.jpg".to_owned()]
+        );
+        assert!(
+            stale_remote_covers(&manifest, "https://other.example.com/covers", &referenced)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn local_cover_names_only_include_files_inside_the_covers_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let covers = directory.path().join("covers");
+        let mut inside = sync_entry("inside", "2026-01-01T00:00:00.000000000Z");
+        inside.cover_url = Some(covers.join("cover-1.jpg").to_string_lossy().into_owned());
+        let mut outside = sync_entry("outside", "2026-01-01T00:00:00.000000000Z");
+        outside.cover_url =
+            Some(directory.path().join("other.jpg").to_string_lossy().into_owned());
+        let mut marker = sync_entry("marker", "2026-01-01T00:00:00.000000000Z");
+        marker.cover_url = Some("catchup-cover:cover-3.jpg".to_owned());
+
+        let names = collect_local_cover_names(&[inside, outside, marker], &covers);
+
+        assert_eq!(names, BTreeSet::from(["cover-1.jpg".to_owned()]));
     }
 
     #[test]

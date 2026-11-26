@@ -70,15 +70,29 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
       - name: 安装 Android SDK 与 NDK
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install \
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1)"
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error title=缺少 Android SDK::未在 $SDK 找到 cmdline-tools，请检查 runner 环境。"
+            exit 1
+          fi
+          echo "使用 $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
             "platforms;android-37.0" \
             "build-tools;36.0.0" \
             "ndk;27.0.12077973"
+          echo "NDK_HOME=$SDK/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -154,14 +168,32 @@ jobs:
 
       - name: 构建通用架构 DMG
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
-        run: npx tauri build --target universal-apple-darwin
+          APPLE_CERT_B64: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ACCOUNT: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_PROVIDER: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+        run: |
+          if [ -n "$APPLE_CERT_B64" ]; then
+            printf '%s' "$APPLE_CERT_B64" | openssl base64 -d -A > "$RUNNER_TEMP/cert.p12"
+            if [ ! -s "$RUNNER_TEMP/cert.p12" ] || [ "$(head -c1 "$RUNNER_TEMP/cert.p12" | od -An -tx1 | tr -d ' \n')" != "30" ]; then
+              echo "::error title=APPLE_CERTIFICATE 无效::需要 .p12 证书文件（证书 + 私钥）的 Base64；PEM/cer 或文本路径都不行。也可删除该 Secret，改为输出未签名 dmg。"
+              exit 1
+            fi
+            export APPLE_CERTIFICATE="$APPLE_CERT_B64"
+            export APPLE_CERTIFICATE_PASSWORD="$APPLE_CERT_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$APPLE_IDENTITY"
+            export APPLE_TEAM_ID="$APPLE_TEAM"
+            export APPLE_ID="$APPLE_ACCOUNT"
+            export APPLE_PASSWORD="$APPLE_APP_PASSWORD"
+            export APPLE_PROVIDER_SHORT_NAME="$APPLE_PROVIDER"
+            echo "已检测到 Apple 证书，将签名并公证"
+          else
+            echo "未配置 APPLE_CERTIFICATE，输出未签名、未公证的 dmg"
+          fi
+          npx tauri build --target universal-apple-darwin
 
       - name: 收集产物
         run: |

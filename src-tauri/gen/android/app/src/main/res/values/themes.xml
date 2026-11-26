@@ -1,6 +1,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.catchup" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- Fills the status/navigation bar area while the web view is inset by MainActivity. -->
+        <item name="android:windowBackground">@color/app_window_background</item>
     </style>
 </resources>

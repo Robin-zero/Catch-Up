@@ -71,12 +71,31 @@ $propsText = @(
     "keyPassword=$($src['keyPassword'])"
 ) -join "`r`n"
 [System.IO.File]::WriteAllText($keystorePropsFile, $propsText + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
-Write-Host "[1/2] keystore.properties 已写入：$keystorePropsFile"
+Write-Host "[1/3] keystore.properties 已写入：$keystorePropsFile"
+
+# ---- 2. 应用名（启动器/最近任务显示，避免 "追更 CatchUp" 被截断）----
+$stringsFile = Join-Path $AndroidProjectDir 'app\src\main\res\values\strings.xml'
+if (Test-Path $stringsFile) {
+    $stringsText = [System.IO.File]::ReadAllText($stringsFile)
+    $patchedStrings = $stringsText `
+        -replace '(<string name="app_name">)[^<]*(</string>)', '$1"追更"$2' `
+        -replace '(<string name="main_activity_title">)[^<]*(</string>)', '$1"追更"$2'
+    if ($patchedStrings -ne $stringsText) {
+        [System.IO.File]::WriteAllText($stringsFile, $patchedStrings, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "[2/3] strings.xml 应用名已更新为「追更」"
+    }
+    else {
+        Write-Host "[2/3] strings.xml 应用名已是「追更」，跳过。"
+    }
+}
+else {
+    Write-Host "[2/3] 未找到 strings.xml，跳过应用名设置。"
+}
 
 # ---- 3. 补丁 build.gradle.kts ----
 $text = [System.IO.File]::ReadAllText($gradleFile)
 if ($text.Contains('keystoreProperties')) {
-    Write-Host "[2/2] build.gradle.kts 已包含签名配置，跳过补丁。"
+    Write-Host "[3/3] build.gradle.kts 已包含签名配置，跳过补丁。"
     exit 0
 }
 
@@ -145,6 +164,6 @@ if ($patched -eq $text) {
 }
 
 [System.IO.File]::WriteAllText($gradleFile, $patched, (New-Object System.Text.UTF8Encoding($false)))
-Write-Host "[2/2] build.gradle.kts 已注入签名配置：$gradleFile"
+Write-Host "[3/3] build.gradle.kts 已注入签名配置：$gradleFile"
 Write-Host ""
 Write-Host "完成。现在 npm run build:android -- --apk 会直接产出已签名的 release APK。"

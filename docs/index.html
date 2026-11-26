@@ -818,8 +818,8 @@
     width: 2px;
     background: linear-gradient(180deg, transparent, rgba(126, 226, 178, 0.9) 16%, rgba(126, 226, 178, 0.5) 84%, transparent);
     box-shadow: 0 0 16px rgba(126, 226, 178, 0.45);
-    transform: translateX(-1px) rotate(14.5deg);
-    transition: left 0.55s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+    transform: translateX(-1px) rotate(14.8deg);
+    transition: left 0.55s cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: none;
   }
   .compare__zone {
@@ -831,14 +831,15 @@
   }
   .compare__zone--light { left: 0; }
   .compare__zone--dark { right: 0; }
+  /* 整条斜边平移出画布，角度保持不变 */
   .compare__zone--light:hover ~ .compare__dark {
-    clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%);
+    clip-path: polygon(116% 0, 100% 0, 100% 100%, 100% 100%);
   }
-  .compare__zone--light:hover ~ .compare__seam { left: 100%; opacity: 0; }
+  .compare__zone--light:hover ~ .compare__seam { left: 108%; }
   .compare__zone--dark:hover ~ .compare__dark {
-    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, -16% 100%);
   }
-  .compare__zone--dark:hover ~ .compare__seam { left: 0; opacity: 0; }
+  .compare__zone--dark:hover ~ .compare__seam { left: -8%; }
   .theme-compare { margin: 0; }
   .theme-compare__legend {
     display: flex;
@@ -874,8 +875,16 @@
   }
   .themes-phone .compare__seam {
     left: 48%;
-    transform: translateX(-1px) rotate(10.5deg);
+    transform: translateX(-1px) rotate(10deg);
   }
+  .themes-phone .compare__zone--light:hover ~ .compare__dark {
+    clip-path: polygon(136% 0, 100% 0, 100% 100%, 100% 100%);
+  }
+  .themes-phone .compare__zone--light:hover ~ .compare__seam { left: 118%; }
+  .themes-phone .compare__zone--dark:hover ~ .compare__dark {
+    clip-path: polygon(0 0, 100% 0, 100% 100%, -36% 100%);
+  }
+  .themes-phone .compare__zone--dark:hover ~ .compare__seam { left: -18%; }
   .themes-phone h3 { font-size: 20px; margin-bottom: 10px; }
   .themes-phone p { color: var(--muted); font-size: 13.5px; line-height: 1.7; margin: 0 0 14px; }
   @media (max-width: 720px) {

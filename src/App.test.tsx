@@ -21,6 +21,7 @@ import {
   importExcel,
   listEntries,
   listTrash,
+  onSyncProgress,
   purgeEntry,
   restoreEntry,
   saveCoverImage,
@@ -41,6 +42,7 @@ import {
   type MediaEntry,
   type MediaType,
   type ScrapeCandidate,
+  type SyncProgress,
   type SyncReport,
 } from "./types";
 
@@ -65,6 +67,7 @@ vi.mock("./api", () => ({
   smartScrape: vi.fn(),
   aiScrape: vi.fn(),
   syncNow: vi.fn(),
+  onSyncProgress: vi.fn(),
   testAiConnection: vi.fn(),
   testWebdavConnection: vi.fn(),
   getLibraryErrorMessage: vi.fn(
@@ -93,6 +96,7 @@ const mockedCacheCoverFromUrl = vi.mocked(cacheCoverFromUrl);
 const mockedAiScrape = vi.mocked(aiScrape);
 const mockedSmartScrape = vi.mocked(smartScrape);
 const mockedSyncNow = vi.mocked(syncNow);
+const mockedOnSyncProgress = vi.mocked(onSyncProgress);
 const mockedTestAiConnection = vi.mocked(testAiConnection);
 const mockedTestWebdavConnection = vi.mocked(testWebdavConnection);
 
@@ -154,6 +158,8 @@ beforeEach(() => {
   mockedAiScrape.mockReset();
   mockedSyncNow.mockReset();
   mockedSyncNow.mockResolvedValue(makeSyncReport());
+  mockedOnSyncProgress.mockReset();
+  mockedOnSyncProgress.mockResolvedValue(() => {});
   mockedTestAiConnection.mockReset();
   mockedTestAiConnection.mockResolvedValue("连接成功，模型 deepseek-flash 可用。");
   mockedTestWebdavConnection.mockReset();
@@ -2537,6 +2543,30 @@ describe("WebDAV 自动同步", () => {
     expect(
       within(dialog).getByRole("button", { name: "同步中…" }),
     ).toBeDisabled();
+  });
+
+  it("同步过程中展示封面上传进度", async () => {
+    mockedListEntries.mockResolvedValue([]);
+    mockedSyncNow.mockReturnValue(new Promise(() => {}));
+    let emitProgress: ((progress: SyncProgress) => void) | undefined;
+    mockedOnSyncProgress.mockImplementation(async (handler) => {
+      emitProgress = handler;
+      return () => {};
+    });
+
+    renderWith(enabledSettings);
+    await screen.findByRole("heading", { name: "内容库还是空的" });
+    await waitFor(() => expect(emitProgress).toBeDefined());
+
+    act(() => emitProgress?.({ phase: "covers", current: 1, total: 3 }));
+    await waitFor(() =>
+      expect(sidebarSyncButton()).toHaveTextContent("上传封面 1/3"),
+    );
+
+    act(() => emitProgress?.({ phase: "snapshot", current: 0, total: 0 }));
+    await waitFor(() =>
+      expect(sidebarSyncButton()).toHaveTextContent("写入同步数据…"),
+    );
   });
 
   it("保存启用设置后点击立即同步，展示合并结果并更新上次同步", async () => {

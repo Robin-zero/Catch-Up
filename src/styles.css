@@ -1113,6 +1113,10 @@ svg {
   -webkit-box-orient: vertical;
 }
 
+.entry-list--grid .entry__time {
+  display: none;
+}
+
 .entry-list--grid .entry__actions {
   justify-content: space-between;
   flex-wrap: wrap;
@@ -1258,7 +1262,9 @@ svg {
 .entry__headline {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 7px;
+  row-gap: 3px;
   min-width: 0;
 }
 
@@ -1323,9 +1329,24 @@ svg {
   flex-wrap: wrap;
 }
 
-.entry__season,
+.entry__season-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .entry__rating {
   font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
 }
 
 .entry__platform {
@@ -1345,6 +1366,7 @@ svg {
 }
 
 .entry__time {
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1367,8 +1389,8 @@ svg {
 
 .entry__progress-value {
   display: block;
-  font-size: 12px;
-  font-weight: 550;
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
@@ -2740,6 +2762,11 @@ kbd {
   .entry__meta {
     font-size: 11.5px;
     margin-top: 3px;
+  }
+
+  .entry__season-tag {
+    height: 19px;
+    font-size: 11px;
   }
 
   .status-pill {

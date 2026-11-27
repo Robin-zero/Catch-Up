@@ -31,6 +31,7 @@ import {
   searchTmdb,
   setEntryStatus,
   smartScrape,
+  onSyncProgress,
   syncNow,
   testAiConnection,
   testWebdavConnection,
@@ -51,6 +52,7 @@ import {
   type MediaEntry,
   type MediaType,
   type ScrapeCandidate,
+  type SyncProgress,
   type SyncReport,
   type ThemeMode,
 } from "./types";
@@ -69,6 +71,7 @@ interface SyncState {
   lastSyncedAt: string | null;
   message?: string;
   report?: SyncReport;
+  progress?: SyncProgress | null;
 }
 
 const SYNC_DEBOUNCE_MS = 2000;
@@ -87,12 +90,25 @@ function formatSyncClock(value: string | null): string | null {
   return Number.isNaN(parsed.getTime()) ? null : syncClockFormatter.format(parsed);
 }
 
+function describeSyncProgress(progress: SyncProgress | null | undefined): string {
+  if (!progress) {
+    return "同步中…";
+  }
+  if (progress.phase === "covers" && progress.total > 0) {
+    return `上传封面 ${progress.current}/${progress.total}`;
+  }
+  if (progress.phase === "snapshot") {
+    return "写入同步数据…";
+  }
+  return "同步中…";
+}
+
 function getSyncLabel(settings: AppSettings, syncState: SyncState): string {
   if (!settings.webdavEnabled) {
     return "仅本地";
   }
   if (syncState.phase === "syncing") {
-    return "同步中…";
+    return describeSyncProgress(syncState.progress);
   }
   if (syncState.phase === "synced") {
     const clock = formatSyncClock(syncState.lastSyncedAt);
@@ -2226,7 +2242,7 @@ function SettingsDialog({
                   type="url"
                   inputMode="url"
                   maxLength={500}
-                  placeholder="https://dav.example.com/catchup"
+                  placeholder="https://dav.jianguoyun.com/dav/"
                   value={values.webdavUrl}
                   aria-invalid={errors.webdavUrl ? true : undefined}
                   aria-describedby={
@@ -2334,6 +2350,11 @@ function SettingsDialog({
                   role={webdavTestResult.ok ? "status" : "alert"}
                 >
                   {webdavTestResult.message}
+                </p>
+              ) : null}
+              {syncing ? (
+                <p className="settings-sync-result" role="status">
+                  {describeSyncProgress(syncState.progress)}
                 </p>
               ) : null}
               {syncState.phase === "synced" && syncState.report ? (
@@ -2975,6 +2996,15 @@ function EntryRow({
             <h3 className="entry__title" id={titleId}>
               {entry.title}
             </h3>
+            {!isMovie &&
+            entry.season !== null &&
+            entry.season !== undefined ? (
+              <span className="entry__season-tag">
+                {/^\d+$/.test(entry.season)
+                  ? `第 ${entry.season} 季`
+                  : entry.season}
+              </span>
+            ) : null}
             <span className={`status-pill status-pill--${entry.status}`}>
               <span className="status-pill__dot" aria-hidden="true" />
               {ENTRY_STATUS_LABELS[entry.status]}
@@ -2984,18 +3014,6 @@ function EntryRow({
             <span className="entry__type-label">
               {MEDIA_TYPE_LABELS[entry.mediaType]}
             </span>
-            {!isMovie &&
-            entry.season !== null &&
-            entry.season !== undefined ? (
-              <>
-                <span className="entry__dot" aria-hidden="true">·</span>
-                <span className="entry__season">
-                  {/^\d+$/.test(entry.season)
-                    ? `第 ${entry.season} 季`
-                    : entry.season}
-                </span>
-              </>
-            ) : null}
             {entry.rating !== null && entry.rating !== undefined ? (
               <>
                 <span className="entry__dot" aria-hidden="true">·</span>
@@ -3490,9 +3508,16 @@ function App() {
       phase: "syncing",
       message: undefined,
       report: undefined,
+      progress: null,
     }));
 
+    let unlisten: (() => void) | null = null;
     try {
+      unlisten = await onSyncProgress((progress) => {
+        setSyncState((current) =>
+          current.phase === "syncing" ? { ...current, progress } : current,
+        );
+      });
       const report = await syncNow();
       setSyncState({
         phase: "synced",
@@ -3512,6 +3537,7 @@ function App() {
         message: getSyncErrorMessage(error),
       });
     } finally {
+      unlisten?.();
       syncInFlightRef.current = false;
       if (syncQueuedRef.current) {
         syncQueuedRef.current = false;

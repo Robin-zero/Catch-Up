@@ -42,6 +42,12 @@ export interface SyncReport {
   warnings: string[];
 }
 
+export interface SyncProgress {
+  phase: "prepare" | "covers" | "snapshot";
+  current: number;
+  total: number;
+}
+
 export interface AppSettings {
   tmdbApiKey: string;
   webdavUrl: string;

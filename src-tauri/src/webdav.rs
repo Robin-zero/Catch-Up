@@ -7,6 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
+use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,77 @@ const COVER_REMOTE_DIRECTORY: &str = "catchup-covers";
 const COVER_MARKER_PREFIX: &str = "catchup-cover:";
 const COVER_MANIFEST_FILE: &str = "webdav-covers.json";
 const MAX_COVER_BYTES: usize = 10 * 1024 * 1024;
+/// 封面并发上传数量：太高容易被网盘限流，太低又拖慢首次同步。
+const COVER_UPLOAD_CONCURRENCY: usize = 4;
+/// 429/5xx/网络错误的最大重试次数（不含首次请求）。
+const RETRY_LIMIT: u32 = 2;
+const RETRY_BASE_DELAY_MS: u64 = 300;
+
+/// 同步进度：`phase` 为 prepare / covers / snapshot。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgress {
+    pub phase: &'static str,
+    pub current: u32,
+    pub total: u32,
+}
+
+pub type ProgressFn<'a> = &'a (dyn Fn(SyncProgress) + Send + Sync);
+
+fn report_progress(
+    progress: Option<ProgressFn<'_>>,
+    phase: &'static str,
+    current: u32,
+    total: u32,
+) {
+    if let Some(progress) = progress {
+        progress(SyncProgress {
+            phase,
+            current,
+            total,
+        });
+    }
+}
+
+/// 可重试错误：把「临时失败」与「配置/权限问题」区分开，避免无意义的重试。
+struct RetryableError {
+    message: String,
+    retryable: bool,
+}
+
+impl RetryableError {
+    fn new(message: String, retryable: bool) -> Self {
+        Self { message, retryable }
+    }
+}
+
+/// 429 与 5xx 通常是临时限流或服务端抖动，值得退避重试。
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
+async fn with_retry<T, F, Fut>(mut operation: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, RetryableError>>,
+{
+    let mut delay = Duration::from_millis(RETRY_BASE_DELAY_MS);
+    let mut attempt = 0u32;
+    loop {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                if !error.retryable || attempt >= RETRY_LIMIT {
+                    return Err(error.message);
+                }
+                attempt += 1;
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(3);
+            }
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +225,15 @@ fn merge_libraries(
         downloaded,
         uploaded,
     }
+}
+
+/// 用于判断远端快照是否真的发生变化：忽略导出时间与条目顺序。
+fn snapshot_content_key(entries: &[SyncEntry], purged: &[PurgedEntry]) -> String {
+    let mut entries = entries.to_vec();
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut purged = purged.to_vec();
+    purged.sort_by(|left, right| left.id.cmp(&right.id));
+    serde_json::to_string(&(entries, purged)).unwrap_or_default()
 }
 
 fn normalize_sync_url(raw_url: &str) -> Result<String, String> {
@@ -352,12 +433,12 @@ async fn create_collection(
     Ok(response.status().as_u16())
 }
 
-async fn send_snapshot(
+async fn send_snapshot_once(
     client: &reqwest::Client,
     url: &str,
     settings: &AppSettings,
     body: &str,
-) -> Result<u16, String> {
+) -> Result<u16, RetryableError> {
     let mut request = client
         .put(url)
         .header(CONTENT_TYPE, "application/json")
@@ -365,11 +446,29 @@ async fn send_snapshot(
     if let Some(header) = authorization_header(settings) {
         request = request.header(AUTHORIZATION, header);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| describe_request_error(&error))?;
-    Ok(response.status().as_u16())
+    let response = request.send().await.map_err(|error| {
+        RetryableError::new(
+            describe_request_error(&error),
+            error.is_timeout() || error.is_connect(),
+        )
+    })?;
+    let status = response.status().as_u16();
+    if is_retryable_status(status) {
+        return Err(RetryableError::new(
+            format!("写入 WebDAV 同步数据失败（HTTP {status}）"),
+            true,
+        ));
+    }
+    Ok(status)
+}
+
+async fn send_snapshot(
+    client: &reqwest::Client,
+    url: &str,
+    settings: &AppSettings,
+    body: &str,
+) -> Result<u16, String> {
+    with_retry(|| send_snapshot_once(client, url, settings, body)).await
 }
 
 async fn put_snapshot(
@@ -553,30 +652,51 @@ async fn ensure_cover_collection(
     Err(format!("创建 WebDAV 封面目录失败（HTTP {status}）"))
 }
 
+async fn upload_cover_once(
+    client: &reqwest::Client,
+    covers_url: &str,
+    settings: &AppSettings,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), RetryableError> {
+    let url = format!("{covers_url}/{name}");
+    let mut request = client
+        .put(url)
+        .header(CONTENT_TYPE, cover_content_type(name))
+        .body(bytes.to_vec());
+    if let Some(header) = authorization_header(settings) {
+        request = request.header(AUTHORIZATION, header);
+    }
+    let response = request.send().await.map_err(|error| {
+        RetryableError::new(
+            describe_request_error(&error),
+            error.is_timeout() || error.is_connect(),
+        )
+    })?;
+    let status = response.status().as_u16();
+    if is_retryable_status(status) {
+        return Err(RetryableError::new(
+            format!("上传封面失败（HTTP {status}）"),
+            true,
+        ));
+    }
+    if !(200..300).contains(&status) {
+        return Err(RetryableError::new(
+            format!("上传封面失败（HTTP {status}）"),
+            false,
+        ));
+    }
+    Ok(())
+}
+
 async fn upload_cover(
     client: &reqwest::Client,
     covers_url: &str,
     settings: &AppSettings,
     name: &str,
-    bytes: Vec<u8>,
+    bytes: &[u8],
 ) -> Result<(), String> {
-    let url = format!("{covers_url}/{name}");
-    let mut request = client
-        .put(url)
-        .header(CONTENT_TYPE, cover_content_type(name))
-        .body(bytes);
-    if let Some(header) = authorization_header(settings) {
-        request = request.header(AUTHORIZATION, header);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| describe_request_error(&error))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("上传封面失败（HTTP {}）", status.as_u16()));
-    }
-    Ok(())
+    with_retry(|| upload_cover_once(client, covers_url, settings, name, bytes)).await
 }
 
 /// 把远端条目里的封面标记下载到本地，并替换成可用的本地路径。
@@ -620,11 +740,15 @@ async fn publish_local_covers(
     covers_directory: &Path,
     manifest: &mut CoverManifest,
     entries: &mut [SyncEntry],
+    progress: Option<ProgressFn<'_>>,
 ) -> Vec<String> {
-    let mut collection_ready = false;
     let mut warnings = Vec::new();
+    // 条目索引 -> 封面文件名：上传成功后统一改写成跨设备标记。
+    let mut planned: Vec<(usize, String)> = Vec::new();
+    // 同名封面只上传一次。
+    let mut pending: BTreeMap<String, PathBuf> = BTreeMap::new();
 
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         let Some(value) = entry.cover_url.clone() else {
             continue;
         };
@@ -653,34 +777,81 @@ async fn publish_local_covers(
             .uploaded
             .get(covers_url)
             .is_some_and(|names| names.contains(name));
-        if !uploaded {
-            let Ok(bytes) = std::fs::read(&path) else {
-                warnings.push(format!("读取本地封面失败：{name}"));
-                continue;
-            };
-            if bytes.len() > MAX_COVER_BYTES {
-                warnings.push(format!("封面超过 10MB，已跳过：{name}"));
-                continue;
-            }
-            if !collection_ready {
-                if let Err(error) = ensure_cover_collection(client, covers_url, settings).await {
-                    warnings.push(error);
-                    return warnings;
+        if !uploaded && !pending.contains_key(name) {
+            match std::fs::metadata(&path) {
+                Ok(metadata) if metadata.len() as usize > MAX_COVER_BYTES => {
+                    warnings.push(format!("封面超过 10MB，已跳过：{name}"));
+                    continue;
                 }
-                collection_ready = true;
+                Ok(_) => {
+                    pending.insert(name.to_owned(), path.clone());
+                }
+                Err(error) => {
+                    warnings.push(format!("读取本地封面失败：{name}（{error}）"));
+                    continue;
+                }
             }
-            if let Err(error) = upload_cover(client, covers_url, settings, name, bytes).await {
-                warnings.push(format!("{error}：{name}"));
-                continue;
-            }
-            manifest
-                .uploaded
-                .entry(covers_url.to_owned())
-                .or_default()
-                .insert(name.to_owned());
         }
 
-        entry.cover_url = Some(cover_marker(name));
+        planned.push((index, name.to_owned()));
+    }
+
+    if !pending.is_empty() {
+        if let Err(error) = ensure_cover_collection(client, covers_url, settings).await {
+            warnings.push(error);
+            return warnings;
+        }
+
+        let total = pending.len() as u32;
+        report_progress(progress, "covers", 0, total);
+        let mut uploads = futures::stream::iter(pending.into_iter().map(|(name, path)| {
+            let client = client.clone();
+            let settings = settings.clone();
+            let covers_url = covers_url.to_owned();
+            async move {
+                let warning = match std::fs::read(&path) {
+                    Ok(bytes) if bytes.len() > MAX_COVER_BYTES => {
+                        Some(format!("封面超过 10MB，已跳过：{name}"))
+                    }
+                    Ok(bytes) => {
+                        match upload_cover(&client, &covers_url, &settings, &name, &bytes).await {
+                            Ok(()) => None,
+                            Err(error) => Some(format!("{error}：{name}")),
+                        }
+                    }
+                    Err(error) => Some(format!("读取本地封面失败：{name}（{error}）")),
+                };
+                (name, warning)
+            }
+        }))
+        .buffer_unordered(COVER_UPLOAD_CONCURRENCY);
+
+        let mut completed = 0u32;
+        while let Some((name, warning)) = uploads.next().await {
+            completed += 1;
+            match warning {
+                None => {
+                    manifest
+                        .uploaded
+                        .entry(covers_url.to_owned())
+                        .or_default()
+                        .insert(name);
+                }
+                Some(warning) => warnings.push(warning),
+            }
+            report_progress(progress, "covers", completed, total);
+        }
+    }
+
+    let uploaded_names = manifest
+        .uploaded
+        .get(covers_url)
+        .cloned()
+        .unwrap_or_default();
+    for (index, name) in planned {
+        if uploaded_names.contains(&name) {
+            entries[index].cover_url = Some(cover_marker(&name));
+        }
     }
 
     warnings
@@ -804,10 +975,15 @@ async fn remove_stale_covers(
     warnings
 }
 
-pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<SyncReport, String> {
+pub async fn sync_now(
+    database: &Database,
+    data_directory: &Path,
+    progress: Option<ProgressFn<'_>>,
+) -> Result<SyncReport, String> {
     // 同一时刻只允许一个同步过程，避免并发请求互相覆盖。
     static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = SYNC_LOCK.lock().await;
+    report_progress(progress, "prepare", 0, 0);
 
     let settings = database.get_settings()?;
     let primary_url = prepare_sync_url(&settings)?;
@@ -820,7 +996,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
     let (mut local_entries, local_purged) = database.read_sync_state()?;
 
     let client = build_client()?;
-    let (mut remote, remote_exists) = fetch_snapshot(&client, &primary_url, &settings).await?;
+    let (mut remote, mut remote_exists) = fetch_snapshot(&client, &primary_url, &settings).await?;
     let mut url = primary_url;
     if !remote_exists && !explicit_file {
         // 配置目录里没有快照时，检查程序自动拼接的子目录（兼容不允许在根目录建文件的服务端）。
@@ -830,9 +1006,12 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
             if fallback_exists {
                 url = fallback_url;
                 remote = fallback_remote;
+                remote_exists = true;
             }
         }
     }
+    // 在封面水合（把标记换成本地路径）之前记录远端内容，用于判断是否真的需要写入。
+    let remote_content_key = snapshot_content_key(&remote.entries, &remote.purged);
 
     let covers_directory = data_directory.join(COVER_DIRECTORY_NAME);
     let manifest_path = data_directory.join(COVER_MANIFEST_FILE);
@@ -879,6 +1058,7 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
             &covers_directory,
             &mut manifest,
             &mut snapshot_entries,
+            progress,
         )
         .await
     } else {
@@ -895,7 +1075,13 @@ pub async fn sync_now(database: &Database, data_directory: &Path) -> Result<Sync
         entries: snapshot_entries,
         purged: merge.purged,
     };
-    put_snapshot(&client, &url, &settings, &snapshot, !explicit_file).await?;
+    // 内容没有变化时跳过写入，避免每次自动同步都产生一次无谓的 PUT。
+    let content_changed = !remote_exists
+        || snapshot_content_key(&snapshot.entries, &snapshot.purged) != remote_content_key;
+    if content_changed {
+        report_progress(progress, "snapshot", 0, 0);
+        put_snapshot(&client, &url, &settings, &snapshot, !explicit_file).await?;
+    }
 
     // 快照写入成功后再清理旧封面，避免远端仍引用时先删了文件。
     if let Some(covers_url) = covers_base.as_deref() {
@@ -1312,5 +1498,39 @@ mod tests {
 
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(load_cover_manifest(&path), CoverManifest::default());
+    }
+
+    #[test]
+    fn retry_covers_rate_limits_and_server_errors_only() {
+        for status in [429, 500, 502, 503, 504] {
+            assert!(is_retryable_status(status), "{status} 应该重试");
+        }
+        for status in [400, 401, 403, 404, 409, 412, 422] {
+            assert!(!is_retryable_status(status), "{status} 不应该重试");
+        }
+    }
+
+    #[test]
+    fn snapshot_content_key_ignores_order_and_exported_time() {
+        let first = sync_entry("a", "2026-01-01T00:00:00.000000000Z");
+        let second = sync_entry("b", "2026-02-01T00:00:00.000000000Z");
+
+        let left = snapshot_content_key(&[first.clone(), second.clone()], &[]);
+        let right = snapshot_content_key(&[second, first], &[]);
+
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn snapshot_content_key_detects_meaningful_changes() {
+        let entry = sync_entry("a", "2026-01-01T00:00:00.000000000Z");
+        let base = snapshot_content_key(std::slice::from_ref(&entry), &[]);
+
+        let mut renamed = entry.clone();
+        renamed.title = "改名后".to_owned();
+        assert_ne!(base, snapshot_content_key(&[renamed], &[]));
+
+        let tombstone = purged("b", "2026-03-01T00:00:00.000000000Z");
+        assert_ne!(base, snapshot_content_key(&[entry], &[tombstone]));
     }
 }

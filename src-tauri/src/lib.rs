@@ -11,7 +11,7 @@ use base64::Engine as _;
 use database::{Database, EntryInput, EntryStatus, ImportReport, MediaEntry, MediaType};
 use scrape::SmartScrapeResult;
 use settings::AppSettings;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tmdb::ScrapeCandidate;
 use webdav::SyncReport;
 
@@ -158,7 +158,10 @@ async fn sync_now(
         .path()
         .app_data_dir()
         .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
-    webdav::sync_now(database.inner(), &data_directory).await
+    let progress = |progress: webdav::SyncProgress| {
+        let _ = app.emit("sync-progress", progress);
+    };
+    webdav::sync_now(database.inner(), &data_directory, Some(&progress)).await
 }
 
 #[cfg(desktop)]

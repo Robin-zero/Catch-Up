@@ -1,5 +1,6 @@
 export { isTauri } from "./web";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AppSettings,
   EntryInput,
@@ -9,6 +10,7 @@ import type {
   MediaType,
   ScrapeCandidate,
   SmartScrapeResult,
+  SyncProgress,
   SyncReport,
 } from "./types";
 import {
@@ -178,6 +180,15 @@ export function aiScrape(
 export function syncNow(): Promise<SyncReport> {
   if (!isTauri()) return Promise.resolve(syncWebNow());
   return invoke<SyncReport>("sync_now");
+}
+
+export function onSyncProgress(
+  handler: (progress: SyncProgress) => void,
+): Promise<() => void> {
+  if (!isTauri()) return Promise.resolve(() => {});
+  return listen<SyncProgress>("sync-progress", (event) => {
+    handler(event.payload);
+  });
 }
 
 export function testAiConnection(settings: AppSettings): Promise<string> {

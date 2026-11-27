@@ -2194,6 +2194,11 @@ kbd {
   color: var(--text-tertiary);
 }
 
+.settings-version {
+  font-size: 10.8px;
+  color: var(--text-tertiary);
+}
+
 .settings-section__fields {
   display: flex;
   flex-direction: column;

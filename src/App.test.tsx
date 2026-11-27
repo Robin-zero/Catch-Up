@@ -60,6 +60,7 @@ vi.mock("./api", () => ({
   adjustProgress: vi.fn(),
   setEntryStatus: vi.fn(),
   getSettings: vi.fn(),
+  getAppVersion: vi.fn(() => Promise.resolve("1.1.0")),
   saveSettings: vi.fn(),
   saveCoverImage: vi.fn(),
   cacheCoverFromUrl: vi.fn((url: string) => Promise.resolve(url)),

@@ -198,6 +198,12 @@ export interface UpdateInfo {
   body?: string;
 }
 
+export async function getAppVersion(): Promise<string> {
+  if (!isTauri()) return "web";
+  const { getVersion } = await import("@tauri-apps/api/app");
+  return getVersion();
+}
+
 export async function checkForUpdate(): Promise<UpdateInfo> {
   if (!isTauri()) {
     return {
@@ -211,12 +217,17 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
     const update: Awaited<ReturnType<typeof updater.check>> =
       await updater.check();
     if (!update) {
-      // 未检测到更新时，Update 类的 currentVersion 取不到；
-      // 我们用默认的空字符串，UI 展示时可据此回退。
+      // 未检测到更新时拿不到 Update 实例，这里直接读取当前应用版本用于展示
+      let currentVersion = "";
+      try {
+        currentVersion = await getAppVersion();
+      } catch {
+        // 取不到版本时留空，UI 会省略括号
+      }
       return {
         available: false,
         version: "",
-        currentVersion: "",
+        currentVersion,
       };
     }
     return {

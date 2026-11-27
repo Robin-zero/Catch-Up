@@ -21,6 +21,7 @@ import {
   downloadAndInstallUpdate,
   downloadExcelTemplate,
   emptyTrash,
+  getAppVersion,
   getLibraryErrorMessage,
   getSettings,
   importExcel,
@@ -1916,6 +1917,7 @@ function SettingsDialog({
   } | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateNote, setUpdateNote] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState("");
   const aiTestingRef = useRef(false);
   const webdavTestingRef = useRef(false);
   const savingRef = useRef(false);
@@ -1937,6 +1939,20 @@ function SettingsDialog({
         : { ...current, lastSyncedAt: settings.lastSyncedAt },
     );
   }, [settings.lastSyncedAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAppVersion()
+      .then((version) => {
+        if (!cancelled) setAppVersion(version);
+      })
+      .catch(() => {
+        // 读取版本失败时保持为空，界面上不展示版本号
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function changeValue<Field extends keyof AppSettings>(
     field: Field,
@@ -2515,6 +2531,9 @@ function SettingsDialog({
             <p className="settings-section__hint">
               CatchUp 会定期检查新版本，你也可以手动检查。
             </p>
+            {appVersion ? (
+              <p className="settings-version">当前版本 {appVersion}</p>
+            ) : null}
             <div className="form-field">
               <label>启动时自动检查</label>
               <div
@@ -2547,7 +2566,10 @@ function SettingsDialog({
             ) : null}
             {updatePhase === "up-to-date" && updateInfo ? (
               <p className="settings-sync-result" role="status">
-                当前已是最新版本（{updateInfo.currentVersion}）
+                当前已是最新版本
+                {updateInfo.currentVersion
+                  ? `（${updateInfo.currentVersion}）`
+                  : ""}
               </p>
             ) : null}
             {updatePhase === "available" && updateInfo ? (

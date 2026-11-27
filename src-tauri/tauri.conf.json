@@ -47,9 +47,9 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/rimo/catchup/releases/latest/download/{{target}}.json",
-        "https://github.com/rimo/catchup/releases/latest/download/{{target}}.json.sig"
+        "https://github.com/Robin-zero/Catch-Up/releases/latest/download/{{target}}.json"
       ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg1RDNCMjU4NkUxMzI2OTAKUldTUUpoTnVXTExUaFd6KzcweEtRcnd1RWRaNWw1NnhwTFVlOVFpNTBnNDRDWDB3WXBqTmNLZ00K",
       "dialog": false
     }
   }

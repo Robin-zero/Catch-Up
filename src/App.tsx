@@ -248,11 +248,15 @@ function EntryTile({
   type,
   coverUrl,
   platform,
+  rating,
+  updatedAt,
   isGrid = false,
 }: {
   type: MediaType;
   coverUrl?: string | null;
   platform?: string | null;
+  rating?: number | null;
+  updatedAt?: string;
   isGrid?: boolean;
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
@@ -292,24 +296,60 @@ function EntryTile({
       )}
       {isGrid ? (
         <span className="entry__tile-badges" aria-hidden="true">
-          <span className="entry__tile-badge entry__tile-badge--type">
-            <MediaTypeIcon type={type} />
-            {MEDIA_TYPE_LABELS[type]}
+          <span className="entry__tile-corner entry__tile-corner--tl">
+            <span className="entry__tile-type">{MEDIA_TYPE_LABELS[type]}</span>
+            {platform ? <PlatformLogo platform={platform} /> : null}
           </span>
-          {platform ? (
-            <span className="entry__tile-badge entry__tile-badge--platform">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M3 12h18M12 3c2.5 2.7 3.8 5.9 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.9-3.8-9S9.5 5.7 12 3Z" />
-              </svg>
-              {platform}
-            </span>
-          ) : null}
+          <span className="entry__tile-corner entry__tile-corner--tr">
+            {rating !== null && rating !== undefined ? (
+              <span className="entry__tile-rating">{formatRating(rating)}</span>
+            ) : null}
+          </span>
+          <span className="entry__tile-corner entry__tile-corner--br">
+            {updatedAt ? (
+              <time className="entry__tile-time" dateTime={updatedAt}>
+                {updatedAtFormatter.format(new Date(updatedAt))}
+              </time>
+            ) : null}
+          </span>
         </span>
       ) : null}
     </span>
   );
 }
+
+function PlatformLogo({ platform }: { platform: string }) {
+  const brand = PLATFORM_BRANDS[platform];
+  if (!brand) {
+    return (
+      <span className="entry__tile-platform entry__tile-platform--generic">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m9 8 7 4-7 4V8Z" />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    <span
+      className="entry__tile-platform"
+      style={{ background: brand.bg, color: brand.fg }}
+      title={platform}
+    >
+      {brand.label}
+    </span>
+  );
+}
+
+const PLATFORM_BRANDS: Record<string, { bg: string; fg: string; label: string }> = {
+  "腾讯视频": { bg: "#00be06", fg: "#fff", label: "腾" },
+  "爱奇艺": { bg: "#1cc749", fg: "#fff", label: "爱" },
+  "优酷": { bg: "#2f88ff", fg: "#fff", label: "优" },
+  "芒果TV": { bg: "#ff7a00", fg: "#fff", label: "芒" },
+  "哔哩哔哩": { bg: "#fb7299", fg: "#fff", label: "B" },
+  "红果短剧": { bg: "#f5222d", fg: "#fff", label: "红" },
+  "Netflix": { bg: "#e50914", fg: "#fff", label: "N" },
+};
 
 function LoadingState() {
   return (
@@ -3166,7 +3206,14 @@ function EntryRow({
             />
           </label>
         ) : null}
-        <EntryTile type={entry.mediaType} coverUrl={entry.coverUrl} platform={entry.platform} isGrid={isGrid} />
+        <EntryTile
+          type={entry.mediaType}
+          coverUrl={entry.coverUrl}
+          platform={entry.platform}
+          rating={entry.rating}
+          updatedAt={entry.updatedAt}
+          isGrid={isGrid}
+        />
 
         <div className="entry__body">
           <div className="entry__headline">

@@ -247,9 +247,13 @@ function SettingsIcon() {
 function EntryTile({
   type,
   coverUrl,
+  platform,
+  isGrid = false,
 }: {
   type: MediaType;
   coverUrl?: string | null;
+  platform?: string | null;
+  isGrid?: boolean;
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
   const [failedCoverUrl, setFailedCoverUrl] = useState<string | null>(null);
@@ -286,6 +290,23 @@ function EntryTile({
       ) : (
         <MediaTypeIcon type={type} />
       )}
+      {isGrid ? (
+        <span className="entry__tile-badges" aria-hidden="true">
+          <span className="entry__tile-badge entry__tile-badge--type">
+            <MediaTypeIcon type={type} />
+            {MEDIA_TYPE_LABELS[type]}
+          </span>
+          {platform ? (
+            <span className="entry__tile-badge entry__tile-badge--platform">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M3 12h18M12 3c2.5 2.7 3.8 5.9 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.9-3.8-9S9.5 5.7 12 3Z" />
+              </svg>
+              {platform}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -3087,6 +3108,7 @@ function EntryRow({
   selectable = false,
   selected = false,
   onSelectedChange,
+  isGrid = false,
 }: {
   entry: MediaEntry;
   pending: boolean;
@@ -3099,6 +3121,7 @@ function EntryRow({
   selectable?: boolean;
   selected?: boolean;
   onSelectedChange?: (selected: boolean) => void;
+  isGrid?: boolean;
 }) {
   const percentage = getProgressPercentage(entry);
   const isMovie = entry.mediaType === "movie";
@@ -3143,7 +3166,7 @@ function EntryRow({
             />
           </label>
         ) : null}
-        <EntryTile type={entry.mediaType} coverUrl={entry.coverUrl} />
+        <EntryTile type={entry.mediaType} coverUrl={entry.coverUrl} platform={entry.platform} isGrid={isGrid} />
 
         <div className="entry__body">
           <div className="entry__headline">
@@ -4331,6 +4354,7 @@ function App() {
                     <EntryRow
                       entry={entry}
                       key={entry.id}
+                      isGrid={settings.libraryView === "grid"}
                       pending={pendingEntryWrites.has(entry.id)}
                       error={entryWriteErrors[entry.id] ?? null}
                       onWrite={(action) => {

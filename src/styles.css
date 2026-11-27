@@ -1101,6 +1101,57 @@ svg {
   height: 150px;
 }
 
+.entry__tile-badges {
+  display: none;
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  gap: 4px;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.entry-list--grid .entry__tile-badges {
+  display: flex;
+}
+
+.entry__tile-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
+.entry__tile-badge .media-type__icon {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.entry__tile-badge--platform svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+.entry-list--grid .entry__meta .entry__type-label,
+.entry-list--grid .entry__meta .entry__platform,
+.entry-list--grid .entry__meta .entry__dot {
+  display: none;
+}
+
 .entry-list--grid .entry__tile .media-type__icon {
   width: 32px;
   height: 32px;

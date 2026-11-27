@@ -2450,10 +2450,14 @@ function SettingsDialog({
             </p>
             <div className="form-field">
               <label>启动时自动检查</label>
-              <div className="segmented-toggle" role="group">
+              <div
+                className="layout-toggle"
+                role="group"
+                aria-label="启动时自动检查应用更新"
+              >
                 <button
                   type="button"
-                  className="segmented-toggle__option"
+                  className="layout-toggle__option"
                   aria-pressed={values.autoCheckUpdate}
                   onClick={() => changeValue("autoCheckUpdate", true)}
                 >
@@ -2461,7 +2465,7 @@ function SettingsDialog({
                 </button>
                 <button
                   type="button"
-                  className="segmented-toggle__option"
+                  className="layout-toggle__option"
                   aria-pressed={!values.autoCheckUpdate}
                   onClick={() => changeValue("autoCheckUpdate", false)}
                 >

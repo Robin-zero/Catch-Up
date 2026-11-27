@@ -191,6 +191,57 @@ export function onSyncProgress(
   });
 }
 
+export interface UpdateInfo {
+  available: boolean;
+  version: string;
+  currentVersion: string;
+  body?: string;
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo> {
+  if (!isTauri()) {
+    return {
+      available: false,
+      version: "",
+      currentVersion: "web",
+    };
+  }
+  try {
+    const updater = await import("@tauri-apps/plugin-updater");
+    const update: Awaited<ReturnType<typeof updater.check>> =
+      await updater.check();
+    if (!update) {
+      // 未检测到更新时，Update 类的 currentVersion 取不到；
+      // 我们用默认的空字符串，UI 展示时可据此回退。
+      return {
+        available: false,
+        version: "",
+        currentVersion: "",
+      };
+    }
+    return {
+      available: true,
+      version: update.version,
+      currentVersion: update.currentVersion,
+      body: update.body,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    throw new Error(`检查更新失败：${message}`);
+  }
+}
+
+export async function downloadAndInstallUpdate(): Promise<void> {
+  if (!isTauri()) return;
+  const updater = await import("@tauri-apps/plugin-updater");
+  const update = await updater.check();
+  if (!update) {
+    throw new Error("当前已是最新版本");
+  }
+  await update.downloadAndInstall();
+}
+
 export function testAiConnection(settings: AppSettings): Promise<string> {
   if (!isTauri()) return testAiConnectionWeb(settings);
   return invoke<string>("test_ai_connection", { settings });

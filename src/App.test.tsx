@@ -2320,7 +2320,10 @@ describe("设置中心", () => {
     const dialog = await openSettings(user);
     mockedSaveSettings.mockImplementation(async (settings) => settings);
 
-    await user.click(within(dialog).getByRole("button", { name: "启用" }));
+    const aiSection = within(dialog).getByRole("region", {
+      name: "AI 补全",
+    });
+    await user.click(within(aiSection).getByRole("button", { name: "启用" }));
     const baseUrl = within(dialog).getByLabelText("接口地址");
     await user.clear(baseUrl);
     await user.click(within(dialog).getByRole("button", { name: "保存设置" }));

@@ -61,6 +61,7 @@ export interface AppSettings {
   aiBaseUrl: string;
   aiApiKey: string;
   aiModel: string;
+  autoCheckUpdate: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -76,6 +77,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiBaseUrl: "https://api.deepseek.com",
   aiApiKey: "",
   aiModel: "deepseek-flash",
+  autoCheckUpdate: true,
 };
 
 export interface ScrapeCandidate {

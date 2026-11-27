@@ -36,6 +36,13 @@ pub struct AppSettings {
     pub ai_base_url: String,
     pub ai_api_key: String,
     pub ai_model: String,
+    /// 启动时自动检查应用更新。
+    #[serde(default = "default_true")]
+    pub auto_check_update: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AppSettings {
@@ -134,6 +141,7 @@ impl AppSettings {
             ai_base_url,
             ai_api_key,
             ai_model,
+            auto_check_update: self.auto_check_update,
         })
     }
 }

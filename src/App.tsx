@@ -15,8 +15,10 @@ import {
   adjustProgress,
   aiScrape,
   cacheCoverFromUrl,
+  checkForUpdate,
   createEntry,
   deleteEntry,
+  downloadAndInstallUpdate,
   downloadExcelTemplate,
   emptyTrash,
   getLibraryErrorMessage,
@@ -1837,6 +1839,16 @@ function SettingsDialog({
     ok: boolean;
     message: string;
   } | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<
+    "idle" | "checking" | "available" | "up-to-date" | "error" | "installing"
+  >("idle");
+  const [updateInfo, setUpdateInfo] = useState<{
+    version: string;
+    currentVersion: string;
+    body?: string;
+  } | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateNote, setUpdateNote] = useState<string | null>(null);
   const aiTestingRef = useRef(false);
   const webdavTestingRef = useRef(false);
   const savingRef = useRef(false);
@@ -1936,6 +1948,44 @@ function SettingsDialog({
     } finally {
       webdavTestingRef.current = false;
       setWebdavTesting(false);
+    }
+  }
+
+  async function handleCheckUpdate() {
+    setUpdateError(null);
+    setUpdateNote(null);
+    setUpdatePhase("checking");
+    try {
+      const info = await checkForUpdate();
+      setUpdateInfo({
+        version: info.version,
+        currentVersion: info.currentVersion,
+        body: info.body,
+      });
+      if (info.available) {
+        setUpdatePhase("available");
+      } else {
+        setUpdatePhase("up-to-date");
+      }
+    } catch (error) {
+      setUpdateError(getWriteErrorMessage(error, "检查更新失败，请稍后再试。"));
+      setUpdatePhase("error");
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (updatePhase !== "available") {
+      return;
+    }
+    setUpdateError(null);
+    setUpdatePhase("installing");
+    try {
+      await downloadAndInstallUpdate();
+      setUpdateNote("安装包已下载，应用将重启以完成更新。");
+      setUpdatePhase("up-to-date");
+    } catch (error) {
+      setUpdateError(getWriteErrorMessage(error, "下载或安装更新失败，请稍后再试。"));
+      setUpdatePhase("available");
     }
   }
 
@@ -2387,6 +2437,104 @@ function SettingsDialog({
                   value={lastSyncedLabel}
                 />
               </div>
+            </div>
+          </section>
+
+          <section
+            className="settings-section"
+            aria-labelledby="settings-update-heading"
+          >
+            <h3 id="settings-update-heading">应用更新</h3>
+            <p className="settings-section__hint">
+              CatchUp 会定期检查新版本，你也可以手动检查。
+            </p>
+            <div className="form-field">
+              <label>启动时自动检查</label>
+              <div className="segmented-toggle" role="group">
+                <button
+                  type="button"
+                  className="segmented-toggle__option"
+                  aria-pressed={values.autoCheckUpdate}
+                  onClick={() => changeValue("autoCheckUpdate", true)}
+                >
+                  启用
+                </button>
+                <button
+                  type="button"
+                  className="segmented-toggle__option"
+                  aria-pressed={!values.autoCheckUpdate}
+                  onClick={() => changeValue("autoCheckUpdate", false)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            {updatePhase === "checking" ? (
+              <p className="settings-sync-result" role="status">
+                正在检查更新…
+              </p>
+            ) : null}
+            {updatePhase === "up-to-date" && updateInfo ? (
+              <p className="settings-sync-result" role="status">
+                当前已是最新版本（{updateInfo.currentVersion}）
+              </p>
+            ) : null}
+            {updatePhase === "available" && updateInfo ? (
+              <div className="update-card" role="status">
+                <p className="update-card__title">
+                  发现新版本{" "}
+                  <span className="update-card__version">
+                    {updateInfo.version}
+                  </span>
+                  ，当前 {updateInfo.currentVersion}
+                </p>
+                {updateInfo.body ? (
+                  <pre className="update-card__notes">{updateInfo.body}</pre>
+                ) : null}
+              </div>
+            ) : null}
+            {updatePhase === "installing" ? (
+              <p className="settings-sync-result" role="status">
+                正在下载并安装，请稍候…
+              </p>
+            ) : null}
+            {updatePhase === "error" && updateError ? (
+              <p
+                className="settings-sync-result settings-sync-result--error"
+                role="alert"
+              >
+                {updateError}
+              </p>
+            ) : null}
+            {updateNote ? (
+              <p className="settings-sync-result" role="status">
+                {updateNote}
+              </p>
+            ) : null}
+            <div className="settings-update-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={handleCheckUpdate}
+                disabled={
+                  updatePhase === "checking" || updatePhase === "installing"
+                }
+              >
+                {updatePhase === "checking" ? "检查中…" : "立即检查"}
+              </button>
+              {updatePhase === "available" ||
+              updatePhase === "installing" ? (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleInstallUpdate}
+                  disabled={updatePhase === "installing"}
+                >
+                  {updatePhase === "installing"
+                    ? "下载中…"
+                    : "下载并安装"}
+                </button>
+              ) : null}
             </div>
           </section>
         </div>
@@ -3683,6 +3831,28 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!settingsLoaded || !settings.autoCheckUpdate) {
+      return;
+    }
+    let cancelled = false;
+    const handle = window.setTimeout(async () => {
+      try {
+        const info = await checkForUpdate();
+        if (cancelled || !info.available) {
+          return;
+        }
+        setAppNotice(`CatchUp ${info.version} 已发布，点击设置查看并更新`);
+      } catch {
+        // 自动检查失败时静默忽略，不打断正常使用。
+      }
+    }, 8000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [settingsLoaded, settings.autoCheckUpdate]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const modifier = event.metaKey || event.ctrlKey;
       if (!modifier) {
@@ -3982,7 +4152,8 @@ function App() {
                   fill="none"
                   aria-hidden="true"
                 >
-                  <path d="M6.3 14.6h7.9a3.3 3.3 0 0 0 .3-6.6 4.4 4.4 0 0 0-8.4-.6 3.6 3.6 0 0 0 .2 7.2Z" />
+                  <path d="M10.7 2.5h2.6a1.2 1.2 0 0 1 1.2 1v.2a1.2 1.2 0 0 0 .7 1.1l.2.1a1.2 1.2 0 0 0 1.2 0l.2-.1a1.2 1.2 0 0 1 1.5.4l1.3 2.2a1.2 1.2 0 0 1-.3 1.6l-.2.1a1.2 1.2 0 0 0-.6 1.1v.2a1.2 1.2 0 0 0 .6 1.1l.2.1a1.2 1.2 0 0 1 .3 1.6l-1.3 2.2a1.2 1.2 0 0 1-1.5.4l-.2-.1a1.2 1.2 0 0 0-1.2 0l-.2.1a1.2 1.2 0 0 1-.7 1.1v.2a1.2 1.2 0 0 1-1.2 1h-2.6a1.2 1.2 0 0 1-1.2-1v-.2a1.2 1.2 0 0 0-.7-1.1l-.2-.1a1.2 1.2 0 0 0-1.2 0l-.2.1a1.2 1.2 0 0 1-1.5-.4l-1.3-2.2a1.2 1.2 0 0 1 .3-1.6l.2-.1a1.2 1.2 0 0 0 .6-1.1v-.2a1.2 1.2 0 0 0-.6-1.1l-.2-.1a1.2 1.2 0 0 1-.3-1.6l1.3-2.2a1.2 1.2 0 0 1 1.5-.4l.2.1a1.2 1.2 0 0 0 1.2 0l.2-.1a1.2 1.2 0 0 1 .7-1.1v-.2a1.2 1.2 0 0 1 1.2-1Z" />
+                  <circle cx="12" cy="10" r="3.3" />
                 </svg>
                 <span className="sync-chip__label">{syncLabel}</span>
               </button>

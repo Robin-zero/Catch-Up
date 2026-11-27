@@ -707,12 +707,12 @@ impl Database {
         let now = timestamp();
         let entry = MediaEntry {
             id: Uuid::new_v4().to_string(),
-            title: input.title,
+            title: input.title.clone(),
             media_type: input.media_type,
             current_progress: input.current_progress,
             total_progress: input.total_progress,
             status: input.status,
-            season: input.season,
+            season: input.season.clone(),
             rating: input.rating,
             platform: input.platform,
             cover_url: input.cover_url,
@@ -725,6 +725,29 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("无法启动创建条目事务：{error}"))?;
+        // 手动新建时拒绝与现有未删除条目同名、同类型、同季的重复条目。
+        let season: Option<&str> = input.season.as_deref();
+        let duplicate = transaction
+            .query_row(
+                "SELECT 1 FROM entries WHERE title = ?1 AND media_type = ?2 AND deleted_at IS NULL \
+                 AND ((season IS NULL AND ?3 IS NULL) OR season = ?4)",
+                params![&input.title, input.media_type.as_str(), season, season],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| format!("检查重复条目失败：{error}"))?
+            .is_some();
+        if duplicate {
+            let season_hint = match season {
+                Some(s) => format!("第 {s} 季、"),
+                None => String::new(),
+            };
+            return Err(format!(
+                "已存在同类型（{media_type}）条目《{title}》（{season_hint}无需重复创建）",
+                media_type = input.media_type.as_str(),
+                title = input.title,
+            ));
+        }
         insert_entry(&transaction, &entry).map_err(|error| format!("创建追更条目失败：{error}"))?;
         transaction
             .commit()
@@ -1263,6 +1286,9 @@ impl Database {
                     value
                 }
             },
+            auto_check_update: !values
+                .get("auto_check_update")
+                .is_some_and(|value| value == "false"),
         })
     }
 
@@ -1283,6 +1309,11 @@ impl Database {
             "false"
         };
         let ai_enabled = if settings.ai_enabled { "true" } else { "false" };
+        let auto_check_update = if settings.auto_check_update {
+            "true"
+        } else {
+            "false"
+        };
         let last_synced_at = settings.last_synced_at.as_deref().unwrap_or("");
         let entries = [
             ("tmdb_api_key", settings.tmdb_api_key.as_str()),
@@ -1297,6 +1328,7 @@ impl Database {
             ("ai_base_url", settings.ai_base_url.as_str()),
             ("ai_api_key", settings.ai_api_key.as_str()),
             ("ai_model", settings.ai_model.as_str()),
+            ("auto_check_update", auto_check_update),
         ];
 
         let mut connection = self.lock()?;
@@ -1662,6 +1694,57 @@ mod tests {
             database.set_entry_status(&created.id, EntryStatus::Completed),
             "要更新状态的条目不存在",
         );
+    }
+
+    #[test]
+    fn rejects_duplicate_title_type_and_season_for_new_entries() {
+        let (_directory, database) = test_database();
+        let _first = database
+            .create_entry(EntryInput {
+                season: Some("2".to_owned()),
+                ..input("庆余年")
+            })
+            .unwrap();
+
+        // 同名 + 同类型 + 同季 → 拒绝
+        assert_error(
+            database.create_entry(EntryInput {
+                season: Some("2".to_owned()),
+                ..input("庆余年")
+            }),
+            "已存在同类型",
+        );
+
+        // 不同季 → 允许
+        let second = database
+            .create_entry(EntryInput {
+                season: Some("3".to_owned()),
+                ..input("庆余年")
+            })
+            .unwrap();
+        assert_eq!(second.season.as_deref(), Some("3"));
+
+        // 电影类型（season 强制为 None）不会与同标题剧集冲突
+        let movie = database
+            .create_entry(EntryInput {
+                media_type: MediaType::Movie,
+                season: None,
+                current_progress: 0,
+                total_progress: None,
+                status: EntryStatus::ToWatch,
+                ..input("庆余年")
+            })
+            .unwrap();
+        assert_eq!(movie.media_type, MediaType::Movie);
+
+        // 回收站里的条目不算重复
+        database.delete_entry(&second.id).unwrap();
+        let _restored_s3 = database
+            .create_entry(EntryInput {
+                season: Some("3".to_owned()),
+                ..input("庆余年")
+            })
+            .unwrap();
     }
 
     #[test]
@@ -2437,7 +2520,7 @@ mod tests {
                 .create_entry(EntryInput {
                     rating: Some(raw),
                     total_progress: None,
-                    ..input("评分")
+                    ..input(format!("评分-{raw}").as_str())
                 })
                 .unwrap();
             assert_eq!(entry.rating, Some(expected), "rating {raw} should round");
@@ -3219,6 +3302,7 @@ mod tests {
             library_view: "list".to_owned(),
             ai_base_url: crate::settings::DEFAULT_AI_BASE_URL.to_owned(),
             ai_model: crate::settings::DEFAULT_AI_MODEL.to_owned(),
+            auto_check_update: true,
             ..AppSettings::default()
         };
         assert_eq!(database.get_settings().unwrap(), expected_defaults);

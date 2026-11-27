@@ -42,5 +42,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/rimo/catchup/releases/latest/download/{{target}}.json",
+        "https://github.com/rimo/catchup/releases/latest/download/{{target}}.json.sig"
+      ],
+      "dialog": false
+    }
   }
 }

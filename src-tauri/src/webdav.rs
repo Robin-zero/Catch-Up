@@ -849,8 +849,16 @@ async fn publish_local_covers(
         .cloned()
         .unwrap_or_default();
     for (index, name) in planned {
-        if uploaded_names.contains(&name) {
-            entries[index].cover_url = Some(cover_marker(&name));
+        // 无论 manifest 是否记录过，cover_url 都应换成跨设备可识别的 marker。
+        // manifest 只用来决定"要不要重传封面"，不应影响 marker 替换，
+        // 否则只要 uploaded 集合丢失就会导致每次启动 content_changed 击穿、每次 PUT 快照。
+        entries[index].cover_url = Some(cover_marker(&name));
+        if !uploaded_names.contains(&name) {
+            manifest
+                .uploaded
+                .entry(covers_url.to_owned())
+                .or_default()
+                .insert(name);
         }
     }
 

@@ -77,6 +77,8 @@ interface SyncState {
 }
 
 const SYNC_DEBOUNCE_MS = 2000;
+// 启动时如果 5 分钟内刚同步过，就不跑启动同步了，避免多设备云盘冲突提示。
+const BOOT_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
 const syncClockFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
@@ -3721,10 +3723,20 @@ function App() {
       return;
     }
     initialSyncRequestedRef.current = true;
-    if (settings.webdavEnabled) {
-      void performSyncRef.current();
+    if (!settings.webdavEnabled) {
+      return;
     }
-  }, [settingsLoaded, settings.webdavEnabled]);
+    // 5 分钟内刚同步过 → 跳过启动同步，避免多设备云盘冲突弹窗。
+    // 手动立即同步、写后防抖同步不受影响。
+    const lastMs = settings.lastSyncedAt
+      ? new Date(settings.lastSyncedAt).getTime()
+      : 0;
+    const sinceLast = Date.now() - lastMs;
+    if (lastMs > 0 && sinceLast < BOOT_SYNC_COOLDOWN_MS) {
+      return;
+    }
+    void performSyncRef.current();
+  }, [settingsLoaded, settings.webdavEnabled, settings.lastSyncedAt]);
 
   async function handleRestore(entry: MediaEntry) {
     if (trashWriteLocks.current.has(entry.id)) {

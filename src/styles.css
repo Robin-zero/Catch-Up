@@ -1174,6 +1174,12 @@ svg {
   color: #fff;
 }
 
+.entry__tile-platform--img {
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
 .entry__tile-rating {
   display: inline-flex;
   align-items: center;

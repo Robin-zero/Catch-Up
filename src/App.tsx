@@ -319,10 +319,12 @@ function EntryTile({
 }
 
 function PlatformLogo({ platform }: { platform: string }) {
-  const brand = PLATFORM_BRANDS[platform];
-  if (!brand) {
+  const src = PLATFORM_LOGOS[platform];
+  const [logoFailed, setLogoFailed] = useState(false);
+  // 本地无对应 logo 或图片加载失败时，回退到通用播放图标
+  if (!src || logoFailed) {
     return (
-      <span className="entry__tile-platform entry__tile-platform--generic">
+      <span className="entry__tile-platform entry__tile-platform--generic" title={platform}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="9" />
           <path d="m9 8 7 4-7 4V8Z" />
@@ -331,24 +333,26 @@ function PlatformLogo({ platform }: { platform: string }) {
     );
   }
   return (
-    <span
-      className="entry__tile-platform"
-      style={{ background: brand.bg, color: brand.fg }}
+    <img
+      className="entry__tile-platform entry__tile-platform--img"
+      src={src}
+      alt=""
       title={platform}
-    >
-      {brand.label}
-    </span>
+      loading="lazy"
+      onError={() => setLogoFailed(true)}
+    />
   );
 }
 
-const PLATFORM_BRANDS: Record<string, { bg: string; fg: string; label: string }> = {
-  "腾讯视频": { bg: "#00be06", fg: "#fff", label: "腾" },
-  "爱奇艺": { bg: "#1cc749", fg: "#fff", label: "爱" },
-  "优酷": { bg: "#2f88ff", fg: "#fff", label: "优" },
-  "芒果TV": { bg: "#ff7a00", fg: "#fff", label: "芒" },
-  "哔哩哔哩": { bg: "#fb7299", fg: "#fff", label: "B" },
-  "红果短剧": { bg: "#f5222d", fg: "#fff", label: "红" },
-  "Netflix": { bg: "#e50914", fg: "#fff", label: "N" },
+// 各视频平台 logo 已下载到 public/platforms/，随应用本地打包，离线可用
+const PLATFORM_LOGOS: Record<string, string> = {
+  "腾讯视频": "/platforms/tencent.ico",
+  "爱奇艺": "/platforms/iqiyi.ico",
+  "优酷": "/platforms/youku.png",
+  "芒果TV": "/platforms/mgtv.png",
+  "哔哩哔哩": "/platforms/bilibili.png",
+  "红果短剧": "/platforms/hongguo.png",
+  "Netflix": "/platforms/netflix.png",
 };
 
 function LoadingState() {
